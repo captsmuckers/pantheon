@@ -1,9 +1,15 @@
-# Secrets. .env holds DISCORD_TOKEN, PLEX_TOKEN, ANTHROPIC_API_KEY and the
-# Spotify client secret — it must never be committed. .env.example documents
-# the variable names instead.
+# Secrets. .env holds DISCORD_TOKEN, PLEX_TOKEN and the Spotify client secret —
+# it must never be committed. .env.example documents the variable names
+# instead, and is generated from schema.py by scripts/gen-env-example.py.
 .env
 .env.*
 !.env.example
+
+# The control panel's own settings: the port, the remote-access toggle, and an
+# scrypt hash of its password. Not a secret in the way .env is, but it is
+# per-machine and there is no reason for it to travel.
+.athena-gui.json
+.athena-gui.*.tmp
 
 # Live OAuth tokens.
 .spotify-cache

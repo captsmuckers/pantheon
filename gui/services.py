@@ -1,0 +1,363 @@
+"""What is running, and starting or stopping it.
+
+The whole difficulty here is launchd, and it is worth stating plainly because
+getting it wrong produces a button that appears to work and does not.
+
+Both services are LaunchAgents with KeepAlive set to true. That is what makes
+the bot survive a crash, and it also means launchd will restart anything you
+kill. `launchctl stop` sends a signal and KeepAlive immediately undoes it;
+running scripts/stop-athena.sh has exactly the same problem. A Stop button
+built on either would report success, and the bot would be back inside ten
+seconds — ThrottleInterval, not a fix.
+
+So when a service is supervised, control goes through launchd itself:
+
+    start     launchctl bootstrap gui/$UID <plist>   (or kickstart if loaded)
+    stop      launchctl bootout    gui/$UID/<label>
+    restart   launchctl kickstart -k gui/$UID/<label>
+
+and when it is not supervised — someone started it from a terminal, or never
+installed the agents — control goes through the same scripts/ launchers a
+person would run by hand. Those two paths are genuinely different and the
+status has to say which one applies, because "Stop" meaning "stop until I say
+otherwise" and "Stop" meaning "stop until launchd notices" are not the same
+promise.
+
+ONE UGLY CONSEQUENCE, recorded rather than hidden. launchd terminates a job
+with SIGTERM. Python's default SIGTERM handling exits without unwinding, so
+bot.py's `finally: await player.shutdown()` does not run and mpv is left
+holding a fullscreen window — `LastExitStatus = 15` in launchctl's output is
+this having already happened. scripts/stop-athena.sh uses SIGINT precisely to
+avoid it. A supervised stop therefore sweeps for orphaned mpv afterwards, the
+same way that script does, and the sweep matches the athena-mpv- socket name so
+an mpv the user opened themselves is left alone.
+
+TWO CHECKOUTS ON ONE MACHINE is assumed, not treated as an error: this fork
+exists alongside the private one it came from, and `pgrep -f 'python.*bot.py'`
+matches both. Every process this module reports is checked against the root of
+the checkout it is running from, so the GUI in one never offers to stop the
+other.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import plistlib
+import re
+import shutil
+import subprocess
+import time
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+UID = os.getuid()
+AGENTS = Path.home() / "Library" / "LaunchAgents"
+
+# The health endpoint the TTS server serves, and which launchd-athena.sh waits
+# on before starting the bot.
+TTS_HEALTH = "http://127.0.0.1:8085/health"
+
+
+@dataclass
+class Service:
+    key: str
+    label: str                 # launchd label
+    title: str                 # what a person calls it
+    pattern: str               # pgrep -f, matching scripts/_common.sh
+    start_script: str
+    stop_script: str
+
+
+SERVICES = {
+    "bot": Service("bot", "com.athena.bot", "Athena",
+                   r"python.*bot\.py", "start-athena.sh", "stop-athena.sh"),
+    "tts": Service("tts", "com.athena.tts", "Speech",
+                   r"python.*tts_server\.py", "start-tts.sh", "stop-tts.sh"),
+}
+
+
+# ----------------------------------------------------------------------
+# looking
+# ----------------------------------------------------------------------
+
+def _run(cmd: list, timeout: float = 15) -> tuple:
+    """(returncode, stdout+stderr). Never raises for an ordinary failure."""
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, (p.stdout + p.stderr).strip()
+    except subprocess.TimeoutExpired:
+        return 124, f"timed out after {timeout}s: {' '.join(cmd)}"
+    except FileNotFoundError:
+        return 127, f"not found: {cmd[0]}"
+
+
+# Processes that match a service pattern by carrying it on their command line
+# without being the service. caffeinate is the live one: every launcher wraps
+# python in `caffeinate -dis`, so `pgrep -f 'python.*bot\.py'` returns the
+# wrapper too and the bot appears to be running twice.
+_WRAPPERS = {"caffeinate", "nohup", "bash", "sh", "zsh", "env", "sudo"}
+
+
+def _cwds(pids: list) -> dict:
+    """{pid: working directory}, in one call rather than one call per pid.
+
+    Ownership is decided on the working directory and NOT on the command line,
+    which was the first attempt and was wrong. A venv on macOS re-execs into
+    the framework interpreter, so the running bot's argv[0] is
+    /opt/homebrew/Cellar/python@3.13/.../Python.app/Contents/MacOS/Python and
+    carries no trace of the checkout it started from. Matching on it made the
+    GUI report its own bot as somebody else's.
+
+    Every launcher does `cd "$ROOT"` first and launchd sets WorkingDirectory,
+    so cwd identifies the checkout on both paths.
+    """
+    if not pids:
+        return {}
+    code, out = _run(["lsof", "-a", "-p", ",".join(map(str, pids)),
+                      "-d", "cwd", "-Fpn"], timeout=10)
+    found, pid = {}, None
+    for line in out.splitlines():
+        if line.startswith("p") and line[1:].strip().isdigit():
+            pid = int(line[1:])
+        elif line.startswith("n") and pid is not None:
+            found[pid] = line[1:].strip()
+    return found
+
+
+def _comms(pids: list) -> dict:
+    """{pid: executable name}, used only to drop wrapper processes."""
+    if not pids:
+        return {}
+    _, out = _run(["ps", "-o", "pid=,comm=", "-p", ",".join(map(str, pids))], timeout=5)
+    found = {}
+    for line in out.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit():
+            found[int(parts[0])] = os.path.basename(parts[1])
+    return found
+
+
+def _split_pids(pattern: str) -> tuple:
+    """(ours, foreign) PIDs matching `pattern`.
+
+    The foreign half is reported rather than discarded, and that is the whole
+    reason this returns a pair. With two checkouts on one machine the honest
+    status is not "stopped" — a bot is audibly running — it is "not this one".
+    A page showing a bare Stopped while the room can hear Athena talking is
+    worse than useless: the obvious response is to press Start, and end up with
+    two bots answering the same channel.
+    """
+    code, out = _run(["pgrep", "-f", pattern], timeout=5)
+    if code != 0 or not out:
+        return [], []
+    pids = [int(p) for p in out.split() if p.isdigit()]
+    cwds, comms = _cwds(pids), _comms(pids)
+
+    ours, foreign = [], []
+    for pid in pids:
+        if comms.get(pid, "") in _WRAPPERS:
+            continue
+        cwd = cwds.get(pid, "")
+        # The TTS launcher runs from $ROOT/tts, so a subdirectory of the
+        # checkout counts as the checkout.
+        if cwd and (cwd == str(ROOT) or cwd.startswith(str(ROOT) + os.sep)):
+            ours.append(pid)
+        else:
+            foreign.append({"pid": pid, "where": cwd or "an unreadable location"})
+    return ours, foreign
+
+
+def _pids(pattern: str) -> list:
+    """Just the PIDs belonging to this checkout."""
+    return _split_pids(pattern)[0]
+
+
+def _launchd(label: str) -> dict:
+    """What launchd knows about `label`, and whether it is even ours.
+
+    A plist pointing at a different checkout is reported as foreign rather than
+    controlled: the private repo's agents and this fork's would otherwise be
+    indistinguishable by label alone, and stopping the wrong one from a page
+    titled with the right one is precisely the sort of thing that destroys
+    trust in a control panel.
+    """
+    info = {"label": label, "installed": False, "loaded": False, "ours": False,
+            "pid": None, "last_exit": None, "plist": None}
+    plist = AGENTS / f"{label}.plist"
+    if plist.exists():
+        info["installed"] = True
+        info["plist"] = str(plist)
+        try:
+            with open(plist, "rb") as fh:
+                data = plistlib.load(fh)
+            program = " ".join(data.get("ProgramArguments") or [data.get("Program", "")])
+            info["ours"] = str(ROOT) in program
+        except Exception:
+            info["ours"] = False
+
+    code, out = _run(["launchctl", "list", label], timeout=5)
+    if code == 0:
+        info["loaded"] = True
+        pid = re.search(r'"PID"\s*=\s*(\d+)', out)
+        exit_ = re.search(r'"LastExitStatus"\s*=\s*(-?\d+)', out)
+        info["pid"] = int(pid.group(1)) if pid else None
+        info["last_exit"] = int(exit_.group(1)) if exit_ else None
+    return info
+
+
+def _uptime(pid: int) -> str:
+    """How long a pid has been up, phrased for a person."""
+    _, out = _run(["ps", "-o", "etime=", "-p", str(pid)], timeout=5)
+    return out.strip() or "?"
+
+
+def tts_health(timeout: float = 2.0) -> dict:
+    """Ask the speech server whether its model is actually loaded.
+
+    Running and ready are different states and the difference is visible to the
+    user: a reply spoken while Kokoro is still loading is dropped silently.
+    """
+    try:
+        with urllib.request.urlopen(TTS_HEALTH, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as exc:
+        return {"error": type(exc).__name__}
+
+
+def status() -> dict:
+    """Everything the status page needs, in one call."""
+    out = {}
+    for key, svc in SERVICES.items():
+        pids, foreign = _split_pids(svc.pattern)
+        ld = _launchd(svc.label)
+        supervised = ld["loaded"] and ld["ours"]
+        out[key] = {
+            "title": svc.title,
+            "running": bool(pids),
+            "pids": pids,
+            "foreign": foreign,
+            "uptime": _uptime(pids[0]) if pids else "",
+            "supervised": supervised,
+            "launchd": ld,
+            # A supervised service that is not running is either mid-restart or
+            # crash-looping, and the last exit code is the only clue on the page.
+            # Meaningless when the agent belongs to another checkout, so it is
+            # only carried through when this GUI is the one in charge.
+            "last_exit": ld["last_exit"] if ld["ours"] else None,
+        }
+    out["tts"]["health"] = tts_health()
+    mpv_ours, mpv_foreign = _split_pids(r"mpv.*(athena|nyx)-mpv-")
+    out["mpv"] = {"pids": mpv_ours, "foreign": mpv_foreign}
+    return out
+
+
+def probes() -> list:
+    """External things the bot needs, checked cheaply.
+
+    Not service state — these are the "why won't it start" answers, and every
+    one of them has actually been the cause once. mpv in particular is the
+    reason the bot crash-looped every eleven seconds under launchd.
+    """
+    found = []
+    for name, why in (("mpv", "plays video; the bot exits at startup without it"),
+                      ("yt-dlp", "resolves YouTube and live streams")):
+        path = shutil.which(name)
+        found.append({"name": name, "ok": bool(path),
+                      "detail": path or "not on PATH", "why": why})
+
+    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434").rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{host}/api/tags", timeout=2) as r:
+            models = [m["name"] for m in json.loads(r.read().decode())["models"]]
+        found.append({"name": "ollama", "ok": True,
+                      "detail": f"{len(models)} models", "models": sorted(models),
+                      "why": "runs the model that answers and routes"})
+    except Exception as exc:
+        found.append({"name": "ollama", "ok": False,
+                      "detail": f"unreachable at {host} ({type(exc).__name__})",
+                      "why": "runs the model that answers and routes"})
+    return found
+
+
+# ----------------------------------------------------------------------
+# touching
+# ----------------------------------------------------------------------
+
+def _script(name: str, *args: str) -> tuple:
+    path = ROOT / "scripts" / name
+    if not path.exists():
+        return 127, f"missing {path}"
+    return _run(["/bin/bash", str(path), *args], timeout=120)
+
+
+def _sweep_mpv() -> str:
+    """Kill mpv instances this checkout's bot left behind.
+
+    Only ours: the pattern matches the IPC socket name the bot sets, so an mpv
+    the user opened themselves is untouched. Same reasoning, and the same
+    pattern, as scripts/stop-athena.sh.
+    """
+    pids = _pids(r"mpv.*(athena|nyx)-mpv-")
+    for pid in pids:
+        try:
+            os.kill(pid, 15)
+        except OSError:
+            pass
+    return f"swept {len(pids)} orphaned mpv" if pids else ""
+
+
+def act(key: str, action: str) -> dict:
+    """start | stop | restart a service. Returns what happened, in words.
+
+    The message matters as much as the result: half of these operations behave
+    differently depending on whether launchd is supervising, and a person
+    watching a spinner deserves to know which path ran.
+    """
+    svc = SERVICES.get(key)
+    if svc is None:
+        return {"ok": False, "message": f"unknown service {key!r}"}
+    if action not in ("start", "stop", "restart"):
+        return {"ok": False, "message": f"unknown action {action!r}"}
+
+    ld = _launchd(svc.label)
+    supervised = ld["loaded"] and ld["ours"]
+    target = f"gui/{UID}/{svc.label}"
+    notes = []
+
+    if supervised:
+        if action == "restart":
+            code, out = _run(["launchctl", "kickstart", "-k", target], timeout=60)
+            verb = "restarted via launchd"
+        elif action == "stop":
+            code, out = _run(["launchctl", "bootout", target], timeout=60)
+            verb = "stopped and unloaded from launchd"
+            if key == "bot":
+                # launchd's SIGTERM skips bot.py's cleanup, so mpv survives.
+                swept = _sweep_mpv()
+                if swept:
+                    notes.append(swept)
+                notes.append("It will not come back until you press Start "
+                             "or log in again.")
+        else:
+            code, out = _run(["launchctl", "kickstart", target], timeout=60)
+            verb = "started via launchd"
+    elif ld["installed"] and ld["ours"] and action in ("start", "restart"):
+        code, out = _run(["launchctl", "bootstrap", f"gui/{UID}", ld["plist"]], timeout=60)
+        verb = "loaded into launchd"
+    else:
+        script = svc.stop_script if action == "stop" else svc.start_script
+        if action == "restart":
+            _script(svc.stop_script)
+            time.sleep(1.0)
+        code, out = _script(script)
+        verb = f"ran scripts/{script}"
+        if ld["installed"] and not ld["ours"]:
+            notes.append(f"A launchd agent named {svc.label} exists but points "
+                         "at a different checkout, so it was left alone.")
+
+    return {"ok": code == 0, "message": verb,
+            "detail": out[-2000:], "notes": notes}

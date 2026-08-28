@@ -58,6 +58,8 @@ SUITES = [
     ("voice", "test_voice.py"),
     ("speech", "test_speech.py"),
     ("speaker attribution", "test_speakers.py"),
+    ("control panel: .env writing", "test_gui_env.py"),
+    ("control panel: server", "test_gui_server.py"),
 ]
 
 failed = []

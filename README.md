@@ -79,6 +79,51 @@ Discord Developer Portal: the bot needs the **Message Content Intent** enabled
 (Bot → Privileged Gateway Intents), plus `Manage Channels` if you want the
 status channel topic updated.
 
+## The control panel
+
+A local web UI for everything below: the settings, starting and stopping the
+services, and the logs.
+
+```
+scripts/start-gui.sh
+```
+
+Then open <http://127.0.0.1:8086>. Ctrl-C stops it.
+
+It deliberately depends on **nothing**. No web framework, no virtualenv, and
+Python 3.9 — the version macOS ships — is enough. That is not minimalism for
+its own sake: this is the tool you open when the bot will not start, and a
+broken virtualenv is one of the commonest reasons for that. A panel that needed
+the environment it exists to repair would be missing exactly when it is wanted.
+
+**Settings** are generated from `schema.py`, so every setting the bot reads
+appears here with its help text, its bounds and its type, and a test asserts
+that the two never drift apart. Saving writes `.env` in place — comments,
+ordering and any setting this build has never heard of are all preserved — and
+tells you which service to restart, because `config.py` reads its configuration
+once at startup and nothing takes effect until it does.
+
+**Tokens are write-only.** The server never sends one to the browser, not even
+masked: a stored token shows as "set", with its last four characters so you can
+tell one from another. Leaving the field alone leaves the stored value alone;
+clearing one is a separate, deliberate checkbox.
+
+**Access.** It listens on `127.0.0.1` and nothing else unless you both set a
+password and turn remote access on — enforced where the socket is bound, not
+just in the UI, so hand-editing `.athena-gui.json` cannot open it either.
+Turning remote access on exposes this page, and the token fields on it, to
+everything that can route to this machine. Only do it on a network you trust.
+
+The panel also refuses requests carrying a hostname it does not answer to,
+which is what stops a page on the internet from pointing its own domain at
+`127.0.0.1` and driving the panel through your browser. If you reach it by some
+other name, use `127.0.0.1` instead.
+
+**Two checkouts on one machine** is handled rather than ignored: the panel
+identifies processes by their working directory, so it will tell you a bot is
+running *from somewhere else* rather than reporting Stopped and inviting you to
+start a second one into the same Discord channel.
+
 ## The machine this is tuned for
 
 Ported from a Windows box with an RTX 2060 Super (8GB VRAM) to a 14-inch

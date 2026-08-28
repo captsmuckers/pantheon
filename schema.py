@@ -20,6 +20,13 @@ tools that manage the bot, not for the bot. The one thing that keeps them honest
 is a test asserting every setting config.py reads appears here.
 """
 
+# Postponed evaluation of annotations, which is what lets `float | None` be
+# written here and still import on Python 3.9 — the version macOS ships. The
+# control panel is meant to run before anything is installed, on whatever
+# interpreter is already on the machine, and it imports this module. Without
+# this line the dataclass below raises TypeError at import on a stock Mac.
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import Any
 
