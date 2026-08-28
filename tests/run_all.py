@@ -1,6 +1,14 @@
-"""Run every suite. No Plex, Spotify, mpv or Discord needed.
+"""Run every suite. No Plex, Spotify, mpv, Discord — or even a .env — needed.
 
     python tests/run_all.py
+
+Placeholders are supplied for the four settings config.py treats as required,
+so a fresh clone passes its own tests before anyone has credentials. They are
+obvious nonsense on purpose: a test that quietly picked up a real token and
+talked to a real server would be far worse than one that fails.
+
+An existing .env still wins — python-dotenv does not override variables that
+are already set, so these only fill gaps.
 """
 
 import os
@@ -15,7 +23,15 @@ try:
 except Exception:
     pass
 
-CHILD_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+# Enough for `import config` to get past its required-setting checks. Nothing
+# here is contacted: every suite fakes Plex, Spotify, mpv and Discord.
+PLACEHOLDERS = {
+    "DISCORD_TOKEN": "test-token-not-real",
+    "PLEX_URL": "http://127.0.0.1:32400",
+    "PLEX_TOKEN": "test-token-not-real",
+    "ALLOWED_CHANNEL_ID": "0",
+}
+CHILD_ENV = {**PLACEHOLDERS, **os.environ, "PYTHONIOENCODING": "utf-8"}
 HERE = Path(__file__).resolve().parent
 SUITES = [
     ("config schema", "test_schema.py"),
