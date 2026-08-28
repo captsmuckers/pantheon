@@ -1,0 +1,44 @@
+# Secrets. .env holds DISCORD_TOKEN, PLEX_TOKEN, ANTHROPIC_API_KEY and the
+# Spotify client secret — it must never be committed. .env.example documents
+# the variable names instead.
+.env
+.env.*
+!.env.example
+
+# Live OAuth tokens.
+.spotify-cache
+
+# Runtime state and generated caches, not source.
+.mpv-pid
+.title-cache.json
+prefs.json
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Local agent/editor settings (machine-specific permissions).
+.claude/settings.local.json
+
+# OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# TTS / STT model weights — hundreds of MB, fetched not versioned.
+# kokoro-v1.0.onnx alone is 310MB and GitHub rejects anything over 100MB.
+models/
+
+# TTS service has its own Python environment — see tts/requirements.txt.
+tts/.venv310/
+tts/.venv/
+# A separate one again for evaluating Chatterbox: it pins torch 2.6.0 and
+# would downgrade the working Kokoro service's torch 2.13 if they shared.
+tts/.venv-chatterbox/
+tts/*.log
+bakeoff.json
+bakeoff-round*.json

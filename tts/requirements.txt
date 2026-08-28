@@ -1,0 +1,37 @@
+# Text to speech service. Python 3.12 ONLY — see tts_server.py's docstring.
+#
+# The version pin survives the move from Windows, but for a completely
+# different reason, and the distinction matters if anyone tries to remove it
+# again.
+#
+# On Windows this had to be 3.10 because every GPU TTS path failed on the bot's
+# 3.14 for want of wheels: DirectML had no working ConvTranspose for the Kokoro
+# model, onnxruntime-gpu's 3.14 wheels failed to initialise their CUDA provider,
+# and kokoro's spacy dependency neither shipped a 3.14 wheel nor built without a
+# compiler. Every one of those is a Windows/CUDA problem and none of them
+# applies here.
+#
+# What applies here is simpler and harder: kokoro itself declares
+# Requires-Python <3.13, on every version it has ever published, and so does
+# misaki underneath it. The bot runs 3.13, so this cannot share its interpreter
+# no matter how the GPU story turns out. pip does not say so plainly — it
+# filters the incompatible versions out and then reports the remainder as
+# though newer ones do not exist, which reads as "kokoro 0.9 was never
+# published" rather than "kokoro 0.9 does not support your Python".
+#
+#     brew install python@3.12
+#     /opt/homebrew/bin/python3.12 -m venv tts/.venv
+#     tts/.venv/bin/python -m pip install -r tts/requirements.txt
+#
+# NO --extra-index-url. The Windows file pulled torch from the cu126 index, and
+# that index has no macOS builds at all — leaving it in is why this file could
+# not be installed here. The plain PyPI wheel is the right one on a Mac: it
+# carries the MPS backend, which is Apple silicon's GPU. The Windows warning
+# that "the plain wheel is CPU-only" is a Windows fact, not a general one.
+torch>=2.13,<3
+
+# Kokoro itself, plus the audio writer. kokoro pulls misaki (grapheme to
+# phoneme) which pulls spacy.
+kokoro>=0.9
+soundfile>=0.12
+numpy>=1.24

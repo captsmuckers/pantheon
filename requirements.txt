@@ -1,0 +1,30 @@
+discord.py>=2.4
+PlexAPI>=4.15
+python-mpv-jsonipc>=1.2
+python-dotenv>=1.0
+spotipy>=2.24
+requests>=2.31
+httpx>=0.27
+
+# YouTube, Twitch and Kick resolution. Imported by youtube.py and streams.py,
+# and previously missing from this file entirely.
+yt-dlp>=2025.1
+
+# Not optional, despite looking it: Kick sits behind Cloudflare and answers
+# yt-dlp with HTTP 403 unless it can impersonate a browser TLS fingerprint,
+# which needs curl_cffi. Twitch and YouTube work without it; Kick does not.
+#
+# The upper bound is load-bearing. yt_dlp/networking/_curlcffi.py accepts only
+# 0.5.10 and 0.10.x through 0.15.x, and refuses anything from 0.16 with
+# "Only curl_cffi versions 0.5.10 and 0.10.x through 0.15.x are supported" —
+# which presents as every impersonate target being listed as unavailable, and
+# Kick still returning 403 even though curl_cffi is installed.
+curl_cffi>=0.10,<0.16
+
+# Optional: real word-level karaoke timing via Musixmatch's unofficial
+# desktop-app endpoint (an actively used community technique, not their
+# locked-down public API — coverage is partial and it could break if
+# Musixmatch changes that internal API). karaoke works without it — see
+# lyrics.py's _fetch_enhanced — falling back to LRCLIB's line-level data
+# and a flat highlight instead of real per-word fill.
+syncedlyrics>=1.0

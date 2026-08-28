@@ -1,0 +1,53 @@
+# Extra packages the dev checkout needs on top of requirements.txt, for voice
+# input. Production deliberately does NOT have these — bot.py imports voice.py
+# unconditionally and it degrades to "voice unavailable" rather than failing,
+# so prod keeps the dependency set it was tested against.
+#
+# Install into this checkout's own venv, never globally:
+#     python3.13 -m venv .venv
+#     .venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+#
+# scripts/start-athena.sh prefers .venv/bin/python when it exists, so a dev
+# launch picks this up automatically and prod falls back to the interpreter on
+# PATH.
+
+# Capture. sounddevice opens the loopback device's output end as an ordinary
+# recording device; numpy does the downmix and the energy gate.
+#
+# On macOS this needs a virtual audio device to capture from, since there is no
+# system loopback: `brew install blackhole-2ch`. The macOS sounddevice wheels
+# bundle their own PortAudio, so there is no brew portaudio to install.
+numpy>=2.0
+sounddevice>=0.5
+
+# Discord's voice support, which discord.py leaves as an optional extra and
+# warns about at startup: "PyNaCl is not installed, voice will NOT be
+# supported". Needed by VOICE_TRACK_SPEAKERS, which holds a voice connection to
+# receive the opcode 5 SPEAKING frames that say who was talking, and by
+# speaking replies into the channel at all. Not macOS-specific — the Windows
+# requirements have the same gap — but it surfaces the moment the bot starts.
+PyNaCl>=1.5
+
+# Speech to text. CTranslate2 under the hood, not PyTorch.
+#
+# CPU-only here, and there is no way around that: CTranslate2 has no Metal or
+# MPS backend, so Apple silicon's GPU and Neural Engine are both unreachable
+# from it. Set WHISPER_DEVICE=cpu (config.py already defaults to it on macOS) —
+# asking for cuda gets an unhelpful failure at model load rather than a
+# fallback. The int8 path uses NEON and runs comfortably faster than realtime
+# on utterances of a few seconds, which is all this ever transcribes.
+faster-whisper>=1.2
+
+# Deliberately absent, and this is the whole difference from the Windows file:
+#
+#   nvidia-cublas-cu12, nvidia-cudnn-cu12
+#
+# Those two are pinned on the Windows side to feed CTranslate2's CUDA build,
+# and they publish no macOS wheels at all — not a wheel that fails to work, no
+# wheel of any kind — so leaving them in makes `pip install -r` fail outright
+# and take voice input down with it. Nothing on a Mac wants them.
+#
+# Also deliberately unpinned here, unchanged from Windows: torch and kokoro.
+# Text to speech is a separate service with its own environment; see
+# tts/requirements.txt. (onnxruntime does get installed, but as faster-whisper's
+# own VAD dependency rather than anything this file asks for.)
