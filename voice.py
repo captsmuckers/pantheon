@@ -577,6 +577,7 @@ class VoiceListener:
     QUEUE_MAX = 8
 
     def __init__(self, *, handler, notify=None, loop=None, suppress_when=None,
+                 acknowledge=None,
                  attribute=None):
         """`handler(text) -> str | None` runs a command; `notify(str)` reports.
 
@@ -596,6 +597,9 @@ class VoiceListener:
             )
         self.handler = handler
         self.notify = notify
+        # Optional async callable played the instant a wake word lands. Wired
+        # to speech.ack by bot.py, and None when speech is unavailable.
+        self.acknowledge = acknowledge
         self.suppress_when = suppress_when
         self.attribute = attribute
         self.loop = loop or asyncio.get_event_loop()
@@ -797,6 +801,19 @@ class VoiceListener:
         log.info("voice %.1fs: %s (%d words)", seconds, verdict, len(text.split()))
 
         if verdict == "WAKE":
+            # Say "heard you" BEFORE running the command, not after.
+            #
+            # The handler can take seconds — a model call, then a TTS render —
+            # and several seconds of silence is indistinguishable from not
+            # having been heard, so people repeat themselves and produce a
+            # second utterance, which makes it worse. The cue is a pre-rendered
+            # clip, so it costs a buffer write rather than a synthesis, and it
+            # lands while the real answer is still being worked out.
+            if self.acknowledge is not None:
+                try:
+                    await self.acknowledge()
+                except Exception:
+                    log.debug("Acknowledgement failed", exc_info=True)
             reply = await self.handler(command)
 
         self._tune(seconds, verdict, text, command, reply, who)
@@ -900,7 +917,7 @@ _listener: VoiceListener | None = None
 
 
 async def start(*, handler, notify=None, suppress_when=None,
-                attribute=None) -> VoiceListener | None:
+                attribute=None, acknowledge=None) -> VoiceListener | None:
     """Start listening, or return None if voice is off or unavailable.
 
     Never raises into startup: voice is an accessory, and a bot that refuses to
@@ -915,7 +932,8 @@ async def start(*, handler, notify=None, suppress_when=None,
     try:
         listener = VoiceListener(handler=handler, notify=notify,
                                  suppress_when=suppress_when,
-                                 attribute=attribute)
+                                 attribute=attribute,
+                                 acknowledge=acknowledge)
         await listener.start()
     except Exception:
         log.exception("Voice failed to start — carrying on without it")

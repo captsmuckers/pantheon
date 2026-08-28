@@ -18,6 +18,7 @@ except Exception:
 CHILD_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 HERE = Path(__file__).resolve().parent
 SUITES = [
+    ("config schema", "test_schema.py"),
     ("history trimming", "test_history.py"),
     ("event loop", "test_event_loop.py"),
     ("queue advance", "test_advance.py"),

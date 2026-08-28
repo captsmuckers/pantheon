@@ -572,6 +572,36 @@ TTS_TIMEOUT = _float("TTS_TIMEOUT", 60.0)
 # the encoder after the device goes quiet.
 TTS_ECHO_GUARD_MS = _int("TTS_ECHO_GUARD_MS", 400)
 
+# A short pre-rendered "heard you" played the moment a wake word lands, before
+# the real answer is worked out.
+#
+# The problem it solves is not the delay, it is the silence. Several seconds
+# with no cue is indistinguishable from not having been heard at all, so people
+# repeat themselves, which produces a second utterance and makes it worse. A
+# cue costs nothing to play — these are rendered once and cached to disk, so
+# the ack is a buffer write, not a synthesis — and it turns the wait into
+# waiting rather than wondering.
+#
+# It also changes what a slow TTS engine costs. Chatterbox at ~8s a reply is
+# unusable in silence and merely slow behind an ack, which is the difference
+# between rejecting an engine and living with it.
+TTS_ACK_ENABLED = _bool("TTS_ACK_ENABLED", True)
+
+# Kept short and in character. "On it, one sec" is the obvious wording and the
+# wrong one — she is meant to be faintly put upon, not eager. Comma separated;
+# one is chosen at random per wake, never the same one twice running.
+TTS_ACK_LINES = [
+    s.strip() for s in (
+        os.getenv("TTS_ACK_LINES", "").strip()
+        or "Mm. || Fine. || One moment. || If I must. || Working on it."
+    ).split("||") if s.strip()
+]
+
+# Where the rendered clips live. Deleting this directory is how you force a
+# re-render after changing the voice or the lines.
+TTS_ACK_DIR = os.getenv("TTS_ACK_DIR", "").strip() or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "tts", "acks")
+
 # --- Idle screen ---
 # Image shown whenever nothing is playing, instead of mpv's own logo screen.
 # Any image mpv can open. Blank to fall back to mpv's default.

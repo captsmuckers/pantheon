@@ -505,7 +505,8 @@ async def _start_services() -> None:
     # transcribing her own voice as it returns through someone else's mic.
     await voice.start(handler=_handle_voice_command,
                       suppress_when=speech.is_speaking,
-                      attribute=speakers.who_spoke)
+                      attribute=speakers.who_spoke,
+                      acknowledge=speech.ack)
 
     try:
         synced = await bot.tree.sync()

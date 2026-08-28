@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import random
 import re
 import threading
 import wave
@@ -195,6 +196,10 @@ class Speaker:
         # callback thread, which has no event loop.
         self._speaking = threading.Event()
         self.stats = {"spoken": 0, "failed": 0, "dropped": 0}
+        # Pre-rendered acknowledgements: [(line, stereo float array)], already
+        # resampled to the device rate so playing one is a buffer write.
+        self._acks: list = []
+        self._last_ack = ""
 
     def is_speaking(self) -> bool:
         """True while audio is on the wire. Read from any thread."""
@@ -391,6 +396,90 @@ class Speaker:
             await asyncio.sleep(config.TTS_ECHO_GUARD_MS / 1000)
             self._speaking.clear()
 
+    # ---- acknowledgements -------------------------------------------
+    #
+    # Rendered once, cached on disk, held in memory as the exact float array
+    # the output stream wants. An ack must be instant to be worth anything:
+    # the whole point is that it lands while the real answer is still being
+    # worked out, so it does no HTTP, no decode and no resample at play time.
+
+    async def prepare_acks(self) -> int:
+        """Render any missing ack clips and load them all. Returns the count.
+
+        Failure here is never fatal. A missing ack costs a cue, not a reply,
+        and the TTS service being slow to come up at boot is ordinary — the
+        clips it could not fetch are simply absent and the next start tries
+        again.
+        """
+        import hashlib
+        import os
+
+        import httpx
+
+        if not (config.TTS_ACK_ENABLED and config.TTS_ACK_LINES):
+            return 0
+        os.makedirs(config.TTS_ACK_DIR, exist_ok=True)
+        loaded = 0
+        for line in config.TTS_ACK_LINES:
+            # Keyed by voice as well as text, so changing the voice renders new
+            # clips instead of playing the old voice's.
+            key = hashlib.sha1(f"{config.TTS_VOICE}|{line}".encode()).hexdigest()[:16]
+            path = os.path.join(config.TTS_ACK_DIR, f"{key}.wav")
+            payload = None
+            if os.path.exists(path):
+                payload = await asyncio.to_thread(lambda p=path: open(p, "rb").read())
+            else:
+                try:
+                    async with httpx.AsyncClient(timeout=config.TTS_TIMEOUT) as client:
+                        r = await client.post(f"{config.TTS_URL}/synthesize",
+                                              json={"text": line,
+                                                    "voice": config.TTS_VOICE})
+                        r.raise_for_status()
+                        payload = r.content
+                    await asyncio.to_thread(
+                        lambda p=path, d=payload: open(p, "wb").write(d))
+                    log.info("Rendered ack %r", line)
+                except Exception as exc:
+                    log.warning("Could not render ack %r (%s) — skipping",
+                                line, exc.__class__.__name__)
+                    continue
+            try:
+                mono, rate = await asyncio.to_thread(decode_wav, payload)
+                audio = await asyncio.to_thread(resample, mono, rate, self._rate)
+                self._acks.append((line, np.column_stack([audio, audio])))
+                loaded += 1
+            except Exception:
+                log.warning("Ack %r would not decode — skipping", line)
+        if loaded:
+            log.info("%d acknowledgement clips ready", loaded)
+        return loaded
+
+    async def ack(self) -> None:
+        """Play a short "heard you", now. Never raises, never queues.
+
+        Deliberately NOT put on the reply queue: it would then land after
+        whatever is already speaking, which is precisely backwards — its value
+        is entirely in being immediate.
+
+        Skipped while she is already talking. Two voices at once is worse than
+        no cue, and if she is mid-sentence the listener plainly knows she heard.
+        """
+        if not self._acks or self._speaking.is_set():
+            return
+        # Never the same one twice running: a fixed clip on every command turns
+        # into a beep people stop hearing.
+        choices = [a for a in self._acks if a[0] != self._last_ack] or self._acks
+        line, stereo = random.choice(choices)
+        self._last_ack = line
+        self._speaking.set()
+        try:
+            await asyncio.to_thread(self._play, stereo)
+        except Exception:
+            log.debug("Ack playback failed", exc_info=True)
+        finally:
+            await asyncio.sleep(config.TTS_ECHO_GUARD_MS / 1000)
+            self._speaking.clear()
+
     def _play(self, stereo) -> None:
         """Blocking write into the long-lived stream. Runs in a worker thread."""
         self._stream.write(np.ascontiguousarray(stereo, dtype="float32"))
@@ -441,6 +530,8 @@ async def start() -> Speaker | None:
     try:
         speaker = Speaker()
         await speaker.start()
+        # After start(), so the clips are resampled to the device's real rate.
+        await speaker.prepare_acks()
     except Exception:
         log.exception("Speech failed to start — carrying on without it")
         return None
@@ -476,3 +567,9 @@ def silence() -> str:
 async def say(text: str) -> None:
     if _speaker is not None:
         await _speaker.say(text)
+
+
+async def ack() -> None:
+    """Play the "heard you" cue. Safe to call when speech is off entirely."""
+    if _speaker is not None:
+        await _speaker.ack()
