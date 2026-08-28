@@ -108,6 +108,27 @@ class Panel:
         return (self.dir / ".env").read_text("utf-8")
 
 
+def test_every_page_renders(p):
+    """The check that was missing when /security shipped raising a TypeError.
+
+    The suite tested the JSON routes thoroughly and never simply asked for the
+    pages, so a page handler called with the wrong arguments passed every test
+    and 500'd the moment it was opened in a browser.
+    """
+    print("every page in the nav actually renders:")
+    for path in ("/", "/settings", "/logs", "/security", "/login"):
+        code, text, headers = request(p.port, path)
+        ok = code == 200 and "text/html" in headers.get("Content-Type", "")
+        check(f"{path} renders", ok and "Something went wrong" not in text, str(code))
+    for path in ("/static/app.css", "/static/app.js", "/static/settings.js",
+                 "/static/status.js", "/static/logs.js", "/static/security.js",
+                 "/static/login.js"):
+        code, _, _ = request(p.port, path)
+        check(f"{path} is served", code == 200, str(code))
+    code, _, _ = request(p.port, "/no-such-page")
+    check("an unknown page is a 404, not a 500", code == 404, str(code))
+
+
 def test_secrets_never_leave_the_process(p):
     print("no response ever contains a stored secret:")
     seen = []
@@ -244,6 +265,7 @@ def test_prefs_file_permissions(p):
 def main():
     p = Panel()
     try:
+        test_every_page_renders(p)
         test_secrets_never_leave_the_process(p)
         test_dns_rebinding(p)
         test_csrf(p)

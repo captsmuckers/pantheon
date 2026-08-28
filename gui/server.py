@@ -256,7 +256,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/logs":
             self._html(pages.logs_page())
         elif path == "/security":
-            self._html(pages.security_page(self.server.prefs))
+            self._html(pages.security_page())
         elif path == "/api/status":
             self._json(200, {"services": services.status(),
                              "probes": services.probes(),
