@@ -73,9 +73,22 @@ cp .env.example .env
 scripts/start-gui.sh
 ```
 
-Then open **<http://127.0.0.1:8086>** and fill in the settings there. The
-control panel needs no virtualenv and runs on the Python macOS already ships,
-so it works before any of the above has finished.
+Then open **<http://127.0.0.1:8086>**. It will land you on a setup page that
+checks what is present, does what it can for you — creating the virtualenv,
+copying the config, pulling a model — and gives you the exact command for the
+few things it cannot, like the audio driver that needs your password.
+
+In fact only the first two lines above are needed. The control panel requires
+no virtualenv and runs on the Python macOS already ships, so you can clone,
+start it, and let it do the rest:
+
+```bash
+git clone https://github.com/captsmuckers/pantheon.git
+cd pantheon && scripts/start-gui.sh
+```
+
+The one thing no wizard can do for you is fetch your credentials. It will tell
+you which are missing and link you to the page to enter them.
 
 `.env.example` documents every setting if you would rather edit a file.
 

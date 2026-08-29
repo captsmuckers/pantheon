@@ -55,7 +55,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import schema                                    # noqa: E402
-from gui import envfile, logs, pages, prefs, services   # noqa: E402
+from gui import envfile, logs, pages, prefs, services  # noqa: E402
+from gui import setup as setup_mod                     # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
 ENV_PATH = ROOT / ".env"
@@ -251,6 +252,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _get(self, path: str, query: dict):
         if path == "/":
+            if not setup_mod.probe()["ready"]:
+                self._send(302, b"", "text/plain", {"Location": "/setup"})
+                return
             self._html(pages.status_page())
         elif path == "/settings":
             self._html(pages.settings_page())
@@ -258,6 +262,16 @@ class Handler(BaseHTTPRequestHandler):
             self._html(pages.logs_page())
         elif path == "/security":
             self._html(pages.security_page())
+        elif path == "/setup":
+            self._html(pages.setup_page())
+        elif path == "/api/setup/status":
+            self._json(200, setup_mod.probe())
+        elif path == "/api/setup/job":
+            try:
+                since = int((query.get("since") or ["0"])[0])
+            except ValueError:
+                since = 0
+            self._json(200, setup_mod.job((query.get("id") or [""])[0], since))
         elif path == "/api/status":
             self._json(200, {"services": services.status(),
                              "probes": services.probes(),
@@ -292,6 +306,9 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/tts/install-language":
             result = services.install_language(str(body.get("lang", "")))
             self._json(200 if result["ok"] else 500, result)
+        elif path == "/api/setup/run":
+            result = setup_mod.start(str(body.get("action", "")))
+            self._json(200 if result["ok"] else 400, result)
         elif path == "/api/logout":
             with _LOCK:
                 SESSIONS.pop(self._cookies().get("athena_session", ""), None)

@@ -15,7 +15,7 @@ from __future__ import annotations
 import html
 
 NAV = (("/", "Status"), ("/settings", "Settings"),
-       ("/logs", "Logs"), ("/security", "Security"))
+       ("/logs", "Logs"), ("/security", "Security"), ("/setup", "Setup"))
 
 
 def _shell(title: str, here: str, body: str, script: str = "") -> str:
@@ -135,6 +135,25 @@ def security_page() -> str:
   <p class="help" id="remote-help"></p>
 </section>
 """, "security.js")
+
+
+def setup_page() -> str:
+    return _shell("Setup", "/setup", """
+<section class="panel">
+  <h2>Setting up</h2>
+  <p class="sub">What is done, what is left, and what this page can do for you.
+     Nothing here is destructive; re-checking is free.</p>
+  <div id="setup-summary" class="summary"><p class="loading">Checking…</p></div>
+</section>
+
+<div id="setup-steps"></div>
+
+<section class="panel" id="job-panel" hidden>
+  <h3 id="job-title">Working…</h3>
+  <pre id="job-output" class="log short"></pre>
+  <p class="sub" id="job-status"></p>
+</section>
+""", "setup.js")
 
 
 def login_page() -> str:
