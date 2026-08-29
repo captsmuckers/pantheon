@@ -45,9 +45,18 @@ function stepCard(s) {
 
 function paint(d) {
   const box = document.getElementById('setup-summary');
+  /* "Everything is in place" is not the finish line — the bot still has to be
+     started, and nothing has yet proved it can reach Discord. Say what to do
+     and what success looks like, or the last step is a guess. */
   box.innerHTML = d.ready
-    ? `<p class="good-line">Everything required is in place.
-         <a href="/">Go to the status page →</a></p>`
+    ? `<p class="good-line">Everything required is in place.</p>
+       <p>Press <b>Start</b> on the <a href="/">Status page</a>, then say
+          <code>what's playing?</code> in your Discord channel. A reply means
+          it is working end to end.</p>
+       <p class="help">If nothing comes back, check
+          <a href="/logs">Logs → Athena</a> for <code>Connected to Discord</code>.
+          Connecting but never replying is almost always the Message Content
+          Intent being off.</p>`
     : `<p><b>${d.remaining} thing${d.remaining === 1 ? '' : 's'} left</b> before
          the bot can start. Optional steps are marked as such.</p>`;
   document.getElementById('setup-steps').innerHTML = d.steps.map(stepCard).join('');
