@@ -57,6 +57,11 @@ def status_page() -> str:
 </section>
 
 <section class="panel">
+  <h2>System</h2>
+  <div id="sysmon" class="sysmon"><p class="loading">Reading…</p></div>
+</section>
+
+<section class="panel">
   <h2>What it needs</h2>
   <p class="sub">External things the bot depends on. Each of these has stopped
      it from starting at least once.</p>

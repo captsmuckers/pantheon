@@ -59,6 +59,7 @@ import schema                                    # noqa: E402
 from gui import envfile, logs, pages, prefs, services  # noqa: E402
 from gui import setup as setup_mod                     # noqa: E402
 from gui import updates as updates_mod                 # noqa: E402
+from gui import system as system_mod                   # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
 ENV_PATH = ROOT / ".env"
@@ -313,6 +314,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/status":
             self._json(200, {"services": services.status(),
                              "probes": services.probes(),
+                             "system": system_mod.snapshot(),
                              "root": str(ROOT)})
         elif path == "/api/settings":
             self._json(200, _settings_payload())

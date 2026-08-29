@@ -274,3 +274,18 @@ body.filtering .section-head .count { display: none; }
 .cmt code { color: var(--accent); }
 .dim { color: var(--faint); }
 #update-output { margin-top: 12px; }
+
+/* ---- system monitors ---- */
+.sysmon { display: grid; gap: 16px; grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 700px) { .sysmon { grid-template-columns: 1fr; } }
+.gauge-wide { grid-column: 1 / -1; }
+.gauge-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.gauge-label { font-size: 13px; font-weight: 600; color: var(--dim); text-transform: uppercase; letter-spacing: .04em; }
+.gauge-value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gauge-value.warm { color: var(--warn); }
+.gauge-value.hot { color: var(--bad); }
+.gauge-track { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; margin: 7px 0 6px; }
+.gauge-fill { height: 100%; background: var(--good); border-radius: 3px; transition: width .4s ease; }
+.gauge-fill.warm { background: var(--warn); }
+.gauge-fill.hot { background: var(--bad); }
+.gauge-detail { font-size: 12px; color: var(--dim); }

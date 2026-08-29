@@ -59,6 +59,54 @@ function serviceCard(key, s) {
   </div>`;
 }
 
+/* A meter reads faster than a number when you are checking "is anything on
+   fire". The number stays for when you actually want the value. */
+function meter(label, pct, detail, extra) {
+  const known = pct !== null && pct !== undefined;
+  const level = !known ? '' : pct >= 90 ? ' hot' : pct >= 70 ? ' warm' : '';
+  return `<div class="gauge">
+    <div class="gauge-top">
+      <span class="gauge-label">${escapeHtml(label)}</span>
+      <span class="gauge-value${level}">${known ? pct + '%' : '—'}</span>
+    </div>
+    <div class="gauge-track"><div class="gauge-fill${level}"
+         style="width:${known ? Math.min(100, pct) : 0}%"></div></div>
+    <div class="gauge-detail">${detail ? escapeHtml(detail) : ''}${
+      extra ? ` <span class="dim">${escapeHtml(extra)}</span>` : ''}</div>
+  </div>`;
+}
+
+function paintSystem(sys) {
+  const box = document.getElementById('sysmon');
+  if (!box || !sys) return;
+  const c = sys.cpu || {}, m = sys.memory || {}, g = sys.gpu || {}, t = sys.temperatures || {};
+
+  const cpuDetail = c.cores ? `${c.cores} cores` : '';
+  const cpuExtra = (c.user !== undefined && c.user !== null)
+    ? `${c.user}% user · ${c.system}% sys` +
+      (c.load ? ` · load ${c.load[0]}` : '') : (c.note || '');
+  const memDetail = (m.used_gb !== null && m.used_gb !== undefined)
+    ? `${m.used_gb} of ${m.total_gb} GB` : '';
+  const memExtra = (m.swap_used_mb ? `swap ${m.swap_used_mb} MB` : '') ;
+
+  let html = meter('CPU', c.percent, cpuDetail, cpuExtra)
+           + meter('Memory', m.percent, memDetail, memExtra)
+           + meter('GPU', g.percent, '', g.note || '');
+
+  /* Temperatures are absent rather than zero, and say why. A gauge reading 0°
+     would be a lie; an empty one with no explanation would just look broken. */
+  if (!t.available) {
+    html += `<div class="gauge gauge-wide">
+      <div class="gauge-top">
+        <span class="gauge-label">Temperature</span>
+        <span class="gauge-value dim">unavailable</span>
+      </div>
+      <div class="gauge-detail">${escapeHtml(t.reason || '')}</div>
+    </div>`;
+  }
+  box.innerHTML = html;
+}
+
 function probeRow(p) {
   return `<div class="probe">
     <span class="tag">${escapeHtml(p.name)}</span>
@@ -74,6 +122,7 @@ function refresh() {
     document.getElementById('services').innerHTML =
       ['bot', 'tts'].map(k => serviceCard(k, d.services[k])).join('');
     document.getElementById('probes').innerHTML = d.probes.map(probeRow).join('');
+    paintSystem(d.system);
   }).catch(() => {});
 }
 

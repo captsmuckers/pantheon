@@ -585,6 +585,44 @@ catch; run it. Model choice matters more than prompt wording here.
 
 ---
 
+## What the Status page shows
+
+Alongside the services, it reports **CPU, memory and GPU** — sampled without
+any privileges, because the panel is a network-listening web server that also
+runs pip, git and launchctl, and giving that root to draw a gauge would be a
+bad trade.
+
+CPU is differenced from the kernel's tick counters between polls. A single
+`top -l 1` reports the average since boot, which looks like a live reading and
+is not; `top -l 2` is accurate but takes over a second, which is far too slow
+to poll.
+
+Memory is counted the way Activity Monitor counts it — app memory plus wired
+plus compressed. Free pages are not the useful number on macOS: the kernel
+keeps very little genuinely free, so a free-based figure reads alarmingly low
+on a perfectly healthy machine.
+
+**The GPU figure measures GPU cores only.** On Apple silicon, video encode and
+decode run on the media engine — separate silicon — so a screen share can be
+encoding three streams while this reads 0%. That is correct, not a fault. The
+media engine exposes no unprivileged counter at all; `AppleAVD` publishes only
+a power state.
+
+**Temperatures are not shown by default.** Apple silicon exposes thermal
+sensors only to root: `powermetrics` requires it, and the ioreg sensor nodes
+carry no readable values otherwise. Rather than give the panel privileges,
+there is an opt-in root helper that samples into a file the panel reads:
+
+```bash
+sudo scripts/install-temp-sensors.sh              # install
+sudo scripts/install-temp-sensors.sh --uninstall  # remove
+```
+
+It has no network, no input and no arguments, and it also picks up GPU power
+and frequency — the closest available measure of the media-engine work the
+cores figure misses. Without it the page says temperatures are unavailable and
+why, rather than showing a zero.
+
 ## Keeping it up to date
 
 The **Status** page checks the repository and shows what is new. Updating is
