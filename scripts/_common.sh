@@ -105,12 +105,21 @@ tts_python() {
     fi
 }
 
-# The engine flags to hand tts_server.py, if any.
+# The flags to hand tts_server.py.
+#
+# --voice and --lang are always passed, because they decide which phonemiser is
+# preloaded and what /health reports. Without them the server preloads British
+# and the settings page shows British no matter what .env says — the reported
+# state would be a guess rather than the truth.
 tts_args() {
-    local engine ref
+    local engine ref voice lang
+    voice="$(env_value TTS_VOICE bf_emma)"
+    lang="$(env_value TTS_LANG_CODE auto)"
+    printf -- "--voice %s --lang %s" "$voice" "$lang"
+
     engine="$(env_value TTS_ENGINE kokoro)"
     [ "$engine" = "kokoro" ] && return
-    printf -- "--engine %s" "$engine"
+    printf -- " --engine %s" "$engine"
     ref="$(env_value TTS_VOICE_REF "")"
     if [ -n "$ref" ]; then
         case "$ref" in /*) ;; *) ref="$ROOT/$ref" ;; esac

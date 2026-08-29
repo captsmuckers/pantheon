@@ -108,6 +108,7 @@ class Handler(BaseHTTPRequestHandler):
         # here should ever be framed, sniffed, or allowed to load a remote font.
         self.send_header("Content-Security-Policy",
                          "default-src 'self'; img-src 'self' data:; "
+                         "media-src 'self' blob:; "
                          "style-src 'self'; script-src 'self'; frame-ancestors 'none'")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
@@ -269,6 +270,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"streams": logs.available()})
         elif path == "/api/security":
             self._json(200, _security_state(self.server.prefs))
+        elif path == "/api/tts/languages":
+            self._json(200, _languages())
+        elif path == "/api/tts/voices":
+            self._json(200, services.voices())
         else:
             self._fail(404, "No such page.")
 
@@ -282,6 +287,11 @@ class Handler(BaseHTTPRequestHandler):
             self._json(*_save_settings(body))
         elif path == "/api/security":
             self._json(*self._save_security(body))
+        elif path == "/api/tts/preview":
+            self._preview(body)
+        elif path == "/api/tts/install-language":
+            result = services.install_language(str(body.get("lang", "")))
+            self._json(200 if result["ok"] else 500, result)
         elif path == "/api/logout":
             with _LOCK:
                 SESSIONS.pop(self._cookies().get("athena_session", ""), None)
@@ -317,6 +327,16 @@ class Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True}, {
             "Set-Cookie": f"athena_session={token}; Path=/; HttpOnly; "
                           f"SameSite=Strict; Max-Age={SESSION_LIFETIME}"})
+
+    def _preview(self, body: dict):
+        """Speak a line with an unsaved voice, so it can be judged before saving."""
+        wav, error = services.preview(str(body.get("voice") or ""),
+                                      str(body.get("lang") or "auto"),
+                                      str(body.get("text") or ""))
+        if error is not None:
+            self._json(409 if error.get("needs") else 502, {"ok": False, **error})
+            return
+        self._send(200, wav, "audio/wav", {"Cache-Control": "no-store"})
 
     def _api_logs(self, query: dict):
         key = (query.get("stream") or ["athena"])[0]
@@ -411,10 +431,35 @@ def _settings_payload() -> dict:
             entry["hint"] = f"…{stored[-4:]}" if len(stored) >= 4 else ""
             entry["value"] = ""
         else:
-            entry["value"] = current.get(s.name, "")
+            # A setting absent from .env is not blank — the bot uses the
+            # default, so that is what the page must show. Reporting "" instead
+            # made a choice field render its value as unrecognised and offer a
+            # phantom "(not a listed choice)" option for the empty string.
+            entry["value"] = current.get(s.name, entry["default"])
+            entry["explicit"] = s.name in current
         fields.append(entry)
     return {"fields": fields, "sections": list(schema.SECTIONS),
             "env_exists": ENV_PATH.exists(), "env_path": str(ENV_PATH)}
+
+
+def _languages() -> dict:
+    """Which languages the SERVING process can actually phonemise.
+
+    Read from the speech server's /health rather than kept here, because the
+    answer depends on what is installed in the TTS virtualenv — which the panel
+    cannot import and must not guess at. A second copy of this list would drift
+    the moment somebody installed a package.
+    """
+    health = services.tts_health()
+    if health.get("error"):
+        return {"ok": False, "error": health["error"],
+                "message": "The speech service is not answering, so the panel "
+                           "cannot tell which languages are installed.",
+                "languages": {}}
+    return {"ok": True, "languages": health.get("languages", {}),
+            "active": health.get("lang", ""), "setting": health.get("lang_setting", ""),
+            "installable": {k: v.get("note", "")
+                            for k, v in services.LANGUAGE_PACKAGES.items()}}
 
 
 def _save_settings(body: dict):

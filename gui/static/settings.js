@@ -43,9 +43,11 @@ function widget(f) {
     const opts = f.choices.map(c =>
       `<option value="${escapeHtml(c)}" ${c === v ? 'selected' : ''}>${escapeHtml(c || '(blank)')}</option>`
     ).join('');
-    const known = f.choices.includes(v);
+    /* Only offer an unlisted value when there actually is one. An empty value
+       is "not set", which the default now covers, not a mystery choice. */
+    const unlisted = v && !f.choices.includes(v);
     return `<select id="${id}" data-name="${f.name}">${opts}
-      ${known ? '' : `<option value="${escapeHtml(v)}" selected>${escapeHtml(v)} (not a listed choice)</option>`}
+      ${unlisted ? `<option value="${escapeHtml(v)}" selected>${escapeHtml(v)} (not a listed choice)</option>` : ''}
       </select>`;
   }
   if (f.kind === 'text') {
@@ -72,6 +74,7 @@ function fieldBlock(f) {
       <label for="f-${f.name}">${escapeHtml(f.name)}${f.required ? '<span class="req">*</span>' : ''}${tag}</label>
       ${widget(f)}
       ${f.help ? `<p class="help">${escapeHtml(f.help)}</p>` : ''}
+      ${extras(f)}
       <p class="err" hidden></p>
     </div>`;
 }
@@ -188,7 +191,203 @@ document.getElementById('settings-form').addEventListener('submit', e => {
   }).catch(() => {});
 });
 
+/* Two settings get more than a plain input, because both are things you want
+   to try rather than guess at. The voice gets a Test button that speaks with
+   whatever is currently TYPED — not what is saved — so a voice can be judged
+   before committing to it. The language gets a live report of which
+   phonemisers are actually installed. */
+function extras(f) {
+  if (f.name === 'TTS_VOICE') {
+    return `<div class="try">
+        <button type="button" id="try-voice">▶ Test this voice</button>
+        <button type="button" id="browse-voices" class="ghost">Browse voices</button>
+        <span class="try-note" id="try-note"></span>
+        <audio id="try-audio" controls hidden></audio>
+      </div>
+      <div id="voice-list" class="voice-list" hidden></div>`;
+  }
+  if (f.name === 'TTS_LANG_CODE') {
+    return `<div id="lang-state" class="lang-state"></div>`;
+  }
+  return '';
+}
+
+function currentVoiceAndLang() {
+  const v = document.getElementById('f-TTS_VOICE');
+  const l = document.getElementById('f-TTS_LANG_CODE');
+  return { voice: v ? v.value.trim() : '', lang: l ? l.value : 'auto' };
+}
+
+/* Which languages the serving process can phonemise. Asked of the speech
+   server rather than hardcoded here: the answer depends on what is installed
+   in its virtualenv, and a copy kept in this file would be wrong the moment
+   somebody pressed Install. */
+let LANGS = {};
+let INSTALL_NOTES = {};
+
+function paintLanguages(d) {
+  const box = document.getElementById('lang-state');
+  const sel = document.getElementById('f-TTS_LANG_CODE');
+  if (!box) return;
+
+  if (!d.ok) {
+    box.innerHTML = `<p class="note-sm">${escapeHtml(d.message || 'Speech service unreachable.')}</p>`;
+    return;
+  }
+  LANGS = d.languages || {};
+  INSTALL_NOTES = d.installable || {};
+
+  /* Annotate the dropdown itself, so an unavailable language is obvious at the
+     moment of choosing rather than after saving and restarting. */
+  if (sel) {
+    for (const opt of sel.options) {
+      const info = LANGS[opt.value];
+      if (!info) continue;
+      opt.textContent = info.available
+        ? `${opt.value} — ${info.name}`
+        : `${opt.value} — ${info.name} (needs ${info.needs})`;
+    }
+  }
+  renderLangNotice();
+}
+
+function renderLangNotice() {
+  const box = document.getElementById('lang-state');
+  const { lang } = currentVoiceAndLang();
+  const info = LANGS[lang];
+  if (!box) return;
+  if (!info || info.available) { box.innerHTML = ''; return; }
+  const extra = INSTALL_NOTES[lang] || '';
+  box.innerHTML = `<div class="note-sm warn">
+      <b>${escapeHtml(info.name)} needs an extra package.</b>
+      Its pronunciation rules are not part of the base install, so the speech
+      service would refuse to start with this selected.
+      ${extra ? `<br>${escapeHtml(extra)}` : ''}
+      <div class="secret-actions">
+        <button type="button" class="install-lang" data-lang="${lang}">
+          Install ${escapeHtml(info.needs)}</button>
+        <span class="install-note"></span>
+      </div>
+    </div>`;
+}
+
+document.addEventListener('change', e => {
+  if (e.target.id === 'f-TTS_LANG_CODE') renderLangNotice();
+});
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('#try-voice, .install-lang');
+  if (!btn) return;
+
+  if (btn.id === 'try-voice') {
+    const { voice, lang } = currentVoiceAndLang();
+    const note = document.getElementById('try-note');
+    const audio = document.getElementById('try-audio');
+    btn.disabled = true;
+    note.textContent = 'Synthesising…';
+    note.className = 'try-note';
+    fetch('/api/tts/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Athena-CSRF': '1' },
+      body: JSON.stringify({ voice, lang })
+    }).then(async r => {
+      if (r.ok) {
+        const url = URL.createObjectURL(await r.blob());
+        if (audio.src) URL.revokeObjectURL(audio.src);
+        audio.src = url;
+        audio.hidden = false;
+        audio.play().catch(() => {});
+        note.textContent = `${voice || 'default'} · ${lang}`;
+        return;
+      }
+      const d = await r.json().catch(() => ({}));
+      note.textContent = d.error || 'Preview failed.';
+      note.className = 'try-note bad';
+      if (d.needs) renderLangNotice();
+    }).catch(() => {
+      note.textContent = 'Preview failed.';
+      note.className = 'try-note bad';
+    }).finally(() => { btn.disabled = false; });
+    return;
+  }
+
+  /* Installing is slow — a pip download and install — so the button says so
+     rather than appearing to hang. */
+  const lang = btn.dataset.lang;
+  const note = btn.parentElement.querySelector('.install-note');
+  btn.disabled = true;
+  note.textContent = INSTALL_NOTES[lang]
+    ? 'Installing… ' + INSTALL_NOTES[lang]
+    : 'Installing… this takes a minute.';
+  post('/api/tts/install-language', { lang }).then(r => {
+    note.textContent = r.data.message || '';
+    toast(r.data.message || 'Done', r.ok ? 'good' : 'bad');
+    if (r.ok) loadLanguages();
+  }).catch(() => {}).finally(() => { btn.disabled = false; });
+});
+
+function loadLanguages() {
+  return api('/api/tts/languages').then(paintLanguages).catch(() => {});
+}
+
+/* The published voices, listed in the panel because they are genuinely hard to
+   find: Kokoro's model page does not enumerate them, and the only real list is
+   a VOICES.md inside the repo. Clicking one fills the field but does not save,
+   so the natural move is pick, Test, then Save if you like it. */
+function paintVoices(d) {
+  const box = document.getElementById('voice-list');
+  if (!box) return;
+  if (!d.count) {
+    box.innerHTML = `<p class="note-sm">${escapeHtml(d.message || 'Voice list unavailable.')}
+      <a href="${escapeHtml(d.doc)}" target="_blank" rel="noreferrer noopener">Full list on HuggingFace</a></p>`;
+    return;
+  }
+  const groups = new Map();
+  for (const v of d.voices) {
+    if (!groups.has(v.lang_name)) groups.set(v.lang_name, []);
+    groups.get(v.lang_name).push(v);
+  }
+  let html = `<p class="note-sm">${d.count} published voices. The prefix is the
+      language and the sex — <code>bf_</code> is British female. Ones you have
+      already used are marked; the rest download on first use.
+      <a href="${escapeHtml(d.doc)}" target="_blank" rel="noreferrer noopener">Quality grades</a> ·
+      <a href="${escapeHtml(d.samples)}" target="_blank" rel="noreferrer noopener">Audio samples</a></p>`;
+  for (const [lang, list] of [...groups].sort()) {
+    html += `<div class="vgroup"><h4>${escapeHtml(lang)}</h4><div class="vchips">`
+      + list.map(v => `<button type="button" class="vchip${v.downloaded ? ' have' : ''}"
+           data-voice="${escapeHtml(v.id)}" title="${v.downloaded ? 'already downloaded' : 'downloads on first use'}"
+           >${escapeHtml(v.id)}</button>`).join('')
+      + `</div></div>`;
+  }
+  box.innerHTML = html;
+}
+
+function loadVoices() {
+  return api('/api/tts/voices').then(paintVoices).catch(() => {});
+}
+
+document.addEventListener('click', e => {
+  const toggle = e.target.closest('#browse-voices');
+  if (toggle) {
+    const box = document.getElementById('voice-list');
+    box.hidden = !box.hidden;
+    toggle.textContent = box.hidden ? 'Browse voices' : 'Hide voices';
+    if (!box.hidden && !box.innerHTML) { box.innerHTML = '<p class="loading">Loading…</p>'; loadVoices(); }
+    return;
+  }
+  const chip = e.target.closest('.vchip');
+  if (!chip) return;
+  const input = document.getElementById('f-TTS_VOICE');
+  input.value = chip.dataset.voice;
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  document.querySelectorAll('.vchip.on').forEach(c => c.classList.remove('on'));
+  chip.classList.add('on');
+  document.getElementById('try-voice').click();
+});
+
 function load() {
-  return api('/api/settings').then(d => { render(d); recompute(); });
+  return api('/api/settings')
+    .then(d => { render(d); recompute(); })
+    .then(loadLanguages);
 }
 load();

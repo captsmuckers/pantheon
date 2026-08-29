@@ -361,3 +361,150 @@ def act(key: str, action: str) -> dict:
 
     return {"ok": code == 0, "message": verb,
             "detail": out[-2000:], "notes": notes}
+
+
+# ----------------------------------------------------------------------
+# speech: previewing a voice, and the two languages that need extra packages
+# ----------------------------------------------------------------------
+#
+# Previewing goes through the running speech server rather than loading Kokoro
+# inside the panel. Three reasons, in order of importance: the panel would have
+# to live in the TTS virtualenv and it deliberately needs no virtualenv at all;
+# a second copy of the model would be 700 MB for no gain; and what you want to
+# hear is what the SERVING process will produce, not what a different process
+# with different packages thinks it would.
+#
+# /synthesize returns WAV bytes and does not play anything — the bot is what
+# plays audio into BlackHole — so a preview cannot be heard in the Discord
+# channel. That is the property that makes this safe to expose.
+
+# What installing each language actually takes. Deliberately a fixed table and
+# NOT anything derived from the request: this endpoint runs pip, so the set of
+# things it can possibly install is written here and nowhere else.
+#
+# `after` matters and was nearly missed. `pip install misaki[ja]` succeeds and
+# Japanese still does not work, because unidic ships the CODE for its
+# dictionary and not the dictionary — MeCab then fails on a missing mecabrc at
+# pipeline construction, which would take the speech service down on restart.
+# The install is therefore two steps, and the button is not allowed to report
+# success after only the first.
+LANGUAGE_PACKAGES = {
+    "j": {"pip": "misaki[ja]",
+          "after": [["-m", "unidic", "download"]],
+          "note": "Japanese also needs a dictionary of about 250 MB, "
+                  "so this one takes a few minutes."},
+    "z": {"pip": "misaki[zh]", "after": [], "note": ""},
+}
+
+PREVIEW_TEXT = ("Playing Blade Runner. It is two and a half hours long, and you "
+                "have started it twice this month without finishing it.")
+
+
+def tts_python() -> Path:
+    """The interpreter serving TTS, mirroring scripts/_common.sh tts_python()."""
+    env = envfile_values()
+    if env.get("TTS_ENGINE", "kokoro") == "chatterbox":
+        cb = ROOT / "tts" / ".venv-chatterbox" / "bin" / "python"
+        if cb.exists():
+            return cb
+    venv = ROOT / "tts" / ".venv" / "bin" / "python"
+    return venv if venv.exists() else Path(sys.executable)
+
+
+def envfile_values() -> dict:
+    from gui import envfile
+    return envfile.read(ROOT / ".env")
+
+
+def preview(voice: str, lang: str, text: str = "") -> tuple:
+    """(wav bytes, error dict). Asks the running server to speak, not to play."""
+    payload = json.dumps({"text": (text or PREVIEW_TEXT)[:600],
+                          "voice": voice or "bf_emma",
+                          "lang": lang or "auto"}).encode()
+    req = urllib.request.Request("http://127.0.0.1:8085/synthesize", data=payload,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            return r.read(), None
+    except urllib.error.HTTPError as e:
+        try:
+            body = json.loads(e.read().decode("utf-8"))
+        except Exception:
+            body = {"error": f"HTTP {e.code}"}
+        return None, body
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        return None, {"error": "The speech service is not answering. Start it "
+                               "from the Status page.",
+                      "detail": type(exc).__name__}
+
+
+def install_language(code: str) -> dict:
+    """Install one language's phonemiser into the TTS virtualenv.
+
+    `code` is only ever used to look up LANGUAGE_PACKAGES; neither the package
+    name nor any argument comes from the request. An endpoint that runs pip has
+    to be a fixed menu, not a text field.
+
+    Reports success only when the language can actually be constructed
+    afterwards, verified by importing it in the TTS interpreter — not by pip's
+    exit code, which is happy to install a package whose data is missing.
+    """
+    spec = LANGUAGE_PACKAGES.get(code)
+    if spec is None:
+        return {"ok": False, "message": f"No installable package for {code!r}."}
+    python = tts_python()
+    if not python.exists():
+        return {"ok": False,
+                "message": f"No TTS interpreter at {python} to install into."}
+
+    steps = [["-m", "pip", "install", spec["pip"]]] + list(spec["after"])
+    log = []
+    for step in steps:
+        rc, out = _run([str(python), *step], timeout=1800)
+        log.append(f"$ {' '.join(step)}\n{out[-1500:]}")
+        if rc != 0:
+            return {"ok": False, "package": spec["pip"],
+                    "message": f"Installing {spec['pip']} failed at "
+                               f"`{' '.join(step)}`.",
+                    "detail": "\n\n".join(log)[-4000:]}
+
+    ok, why = _language_works(python, code)
+    return {"ok": ok, "package": spec["pip"],
+            "message": (f"Installed {spec['pip']}. Restart Speech to use it."
+                        if ok else
+                        f"{spec['pip']} installed, but the language still will "
+                        f"not load: {why}"),
+            "detail": "\n\n".join(log)[-4000:]}
+
+
+def _language_works(python: Path, code: str) -> tuple:
+    """Can the TTS interpreter actually build this language's phonemiser?
+
+    Runs in the TTS virtualenv, because that is the one that matters and the
+    panel cannot import kokoro itself. model=False keeps it to the phonemiser:
+    there is no reason to load 700 MB of weights to answer this.
+    """
+    probe = ("from kokoro import KPipeline\n"
+             f"KPipeline(lang_code={code!r}, model=False)\n"
+             "print('OK')\n")
+    rc, out = _run([str(python), "-c", probe], timeout=300)
+    if rc == 0 and "OK" in out:
+        return True, ""
+    tail = [ln for ln in out.splitlines() if ln.strip()]
+    return False, (tail[-1][:200] if tail else "unknown error")
+
+
+def voices() -> dict:
+    """The published voice list, from the speech server.
+
+    Proxied rather than fetched here: the panel has no huggingface_hub, and the
+    serving process is the one that knows which voices are already on disk.
+    """
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8085/voices", timeout=20) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception as exc:
+        return {"error": type(exc).__name__, "voices": [], "count": 0,
+                "message": "The speech service is not answering, so the voice "
+                           "list is unavailable. Start it from the Status page.",
+                "doc": "https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md"}

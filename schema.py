@@ -239,7 +239,19 @@ SETTINGS: tuple[Setting, ...] = (
             "reads them correctly and takes ~8s, holding ~200% CPU while it "
             "does, which can break playback up on a loaded machine."),
     _s("TTS_VOICE", "str", default="bf_emma", section="Speech", restart="tts",
-       help="Kokoro voice name. 54 are published; bf_* and bm_* are British."),
+       help="Kokoro voice name. 54 are published. The first letter is the "
+            "language: af_/am_ American, bf_/bm_ British, and so on. Use Test "
+            "to hear one before saving it."),
+    _s("TTS_LANG_CODE", "choice", default="auto", section="Speech", restart="tts",
+       choices=("auto", "a", "b", "e", "f", "h", "i", "j", "p", "z"),
+       help="Which pronunciation rules to read the text with. This is separate "
+            "from the voice: the voice decides who it sounds like, this decides "
+            "how words are said. \"auto\" takes it from the voice name's first "
+            "letter, which is what you want unless you are deliberately "
+            "mismatching them — a=American, b=British, e=Spanish, f=French, "
+            "h=Hindi, i=Italian, j=Japanese, p=Portuguese, z=Mandarin. Japanese "
+            "and Mandarin need an extra package the settings page will offer to "
+            "install."),
     _s("TTS_VOICE_REF", "path", section="Speech", restart="tts",
        help="Chatterbox only. A clip of the voice to clone. Only the first ~10 "
             "seconds are read, so it should be the best ten, not the longest."),

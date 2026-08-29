@@ -65,15 +65,144 @@ DEFAULT_VOICE = "bf_emma"
 # clip its voice is cloned from. Set from the command line in main().
 ENGINE = "kokoro"
 VOICE_REF = ""
-# 'b' is British English. Using 'a' with a bf_* voice produces an American
-# reading of a British-trained voice, which sounds subtly wrong rather than
-# obviously broken.
-LANG_CODE = "b"
+# Which phonemiser turns spelling into sound. This is NOT the voice: the voice
+# file decides who it sounds like, this decides how words are pronounced. They
+# are chosen separately and Kokoro's convention is that the voice name's first
+# letter IS its language code — af_heart is American, bf_emma is British.
+#
+# It used to be hardcoded to "b", which meant every voice was read with British
+# rules no matter which was picked. Measured rather than assumed: the same
+# voice and text under 'a' and 'b' produce completely different audio
+# (correlation +0.007), differing on schedule, either, tomato, herb, and every
+# word ending in -er, since British English drops the trailing r. So 46 of the
+# 54 published voices were being mispronounced.
+#
+# "auto" derives the code from the voice, which is right by default. An
+# explicit code overrides it, because deliberately reading an American voice
+# with British rules is a legitimate thing to want and used to be the only
+# option available.
+LANG_CODE = "auto"
+
+# Every language Kokoro publishes voices for. Five work out of the box; two
+# need extra packages, and are listed here rather than hidden so the settings
+# page can say WHY they are unavailable and offer to fix it. Hiding them just
+# turns "needs one package" into "seems unsupported".
+LANGUAGES = {
+    "a": "American English", "b": "British English", "e": "Spanish",
+    "f": "French", "h": "Hindi", "i": "Italian", "j": "Japanese",
+    "p": "Brazilian Portuguese", "z": "Mandarin Chinese",
+}
+
+# The two whose phonemiser is not installed by default. `probe` is a module
+# whose presence means the phonemiser will import; `pip` is what installs it.
+# Checked by find_spec rather than by importing, because importing pyopenjtalk
+# costs real time and this runs on every /health.
+EXTRAS = {
+    "j": {"pip": "misaki[ja]", "probe": "pyopenjtalk"},
+    "z": {"pip": "misaki[zh]", "probe": "ordered_set"},
+}
+
+
+def language_available(code: str) -> bool:
+    """Whether this code's phonemiser can be constructed right now."""
+    extra = EXTRAS.get(code)
+    if extra is None:
+        return True
+    import importlib.util
+    try:
+        return importlib.util.find_spec(extra["probe"]) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+# Where the voices are published, and the two pages worth linking a person to.
+# Kokoro's own README does not list them; VOICES.md does, with quality grades,
+# and SAMPLES.md has audio. Neither is easy to find from the model page.
+VOICES_REPO = "hexgrad/Kokoro-82M"
+VOICES_DOC = f"https://huggingface.co/{VOICES_REPO}/blob/main/VOICES.md"
+SAMPLES_DOC = f"https://huggingface.co/{VOICES_REPO}/blob/main/SAMPLES.md"
+
+_voices_cache = None
+
+
+def list_voices() -> dict:
+    """Every published voice, with whether it is already downloaded.
+
+    Served from here rather than looked up by the settings page, because this
+    is the process that knows which ones are on disk — and the panel has no
+    huggingface_hub to ask with.
+
+    Falls back to whatever is already cached locally when the Hub cannot be
+    reached, so the picker still works offline rather than showing nothing.
+    """
+    global _voices_cache
+    if _voices_cache is not None:
+        return _voices_cache
+
+    names, source = [], "hub"
+    try:
+        from huggingface_hub import HfApi
+        names = sorted(f.split("/")[-1][:-3]
+                       for f in HfApi().list_repo_files(VOICES_REPO)
+                       if f.startswith("voices/") and f.endswith(".pt"))
+    except Exception as exc:
+        log.warning("Could not list voices from the Hub (%s); using local cache",
+                    type(exc).__name__)
+        source = "local"
+
+    local = _downloaded_voices()
+    if not names:
+        names = sorted(local)
+
+    out = []
+    for name in names:
+        code = name[:1]
+        out.append({"id": name,
+                    "lang": code,
+                    "lang_name": LANGUAGES.get(code, "Unknown"),
+                    "female": name[1:2] == "f",
+                    "downloaded": name in local})
+    _voices_cache = {"voices": out, "source": source, "count": len(out),
+                     "doc": VOICES_DOC, "samples": SAMPLES_DOC,
+                     "repo": f"https://huggingface.co/{VOICES_REPO}"}
+    return _voices_cache
+
+
+def _downloaded_voices() -> set:
+    """Voice files already in the local HuggingFace cache."""
+    root = os.path.expanduser("~/.cache/huggingface/hub")
+    found = set()
+    for base, _dirs, files in os.walk(root):
+        if os.path.basename(base) != "voices":
+            continue
+        found |= {f[:-3] for f in files if f.endswith(".pt")}
+    return found
+
+
+def language_report() -> dict:
+    """What the settings page needs to render the language picker."""
+    return {code: {"name": name,
+                   "available": language_available(code),
+                   "needs": EXTRAS.get(code, {}).get("pip", "")}
+            for code, name in LANGUAGES.items()}
 
 MAX_CHARS = 600
 
-_pipeline = None
+# One model, many phonemisers. KPipeline accepts a shared KModel, so the 82M
+# weights are loaded once (~700 MB) and each additional language costs about a
+# second and 50 MB. That is what makes previewing a voice in another accent
+# affordable at request time rather than a restart.
+_model = None
+_pipelines = {}
 _lock = threading.Lock()
+
+
+def lang_for(voice: str) -> str:
+    """The language code to phonemise `voice` with."""
+    if LANG_CODE != "auto":
+        return LANG_CODE
+    first = (voice or DEFAULT_VOICE)[:1]
+    return first if first in LANGUAGES else "b"
 
 
 # ----------------------------------------------------------------------
@@ -170,12 +299,13 @@ def colourise(text: str) -> str:
     return "\n".join(out)
 
 
-def get_pipeline(device: str):
-    """Load once, on first use. Guarded because HTTP handlers are threaded."""
-    global _pipeline
-    if _pipeline is None:
+def get_pipeline(device: str, lang: str = None):
+    """Load once per language, on first use. Guarded: handlers are threaded."""
+    global _model
+    lang = lang or lang_for(DEFAULT_VOICE)
+    if lang not in _pipelines:
         with _lock:
-            if _pipeline is None:
+            if lang not in _pipelines:
                 import torch
                 from kokoro import KPipeline
 
@@ -197,9 +327,13 @@ def get_pipeline(device: str):
                     log.info("Loading Kokoro on the Apple silicon GPU (MPS)")
                 else:
                     log.info("Loading Kokoro on CPU")
-                _pipeline = KPipeline(lang_code=LANG_CODE, device=device)
-                log.info("Ready")
-    return _pipeline
+                if _model is None:
+                    from kokoro import KModel
+                    _model = KModel().to(device).eval()
+                _pipelines[lang] = KPipeline(lang_code=lang, model=_model,
+                                             device=device)
+                log.info("Ready (%s)", LANGUAGES.get(lang, lang))
+    return _pipelines[lang]
 
 
 # ----------------------------------------------------------------------
@@ -265,7 +399,7 @@ def _synth_chatterbox(text: str, device: str) -> bytes:
     return buf.getvalue()
 
 
-def synthesize(text: str, voice: str, device: str) -> bytes:
+def synthesize(text: str, voice: str, device: str, lang: str = None) -> bytes:
     """Return a WAV. One inference at a time — the model is not thread-safe.
 
     On the Windows machine serialising also kept this off a GPU shared with
@@ -274,7 +408,7 @@ def synthesize(text: str, voice: str, device: str) -> bytes:
     """
     if ENGINE == "chatterbox":
         return _synth_chatterbox(text, device)
-    pipeline = get_pipeline(device)
+    pipeline = get_pipeline(device, lang or lang_for(voice))
     with _lock:
         chunks = [audio for _, _, audio in pipeline(text, voice=voice, speed=1.0)]
     if not chunks:
@@ -342,6 +476,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
+        if parsed.path == "/voices":
+            # Listed here because this process is the one that knows which are
+            # on disk, and the settings page has no huggingface_hub to ask.
+            self._json(200, list_voices())
+            return
         if parsed.path in ("/", "/logs"):
             self._serve_logs(parse_qs(parsed.query))
             return
@@ -357,11 +496,15 @@ class Handler(BaseHTTPRequestHandler):
         # loaded the model was, and launchd-athena.sh, which waits on exactly
         # this before starting the bot, would have burned its full 90s timeout
         # on every single boot.
-        loaded = _cb_model is not None if ENGINE == "chatterbox" else _pipeline is not None
+        loaded = _cb_model is not None if ENGINE == "chatterbox" else bool(_pipelines)
+        lang = lang_for(DEFAULT_VOICE)
         self._json(200, {"status": "ok", "ready": loaded,
                          "voice": (VOICE_REF or DEFAULT_VOICE) if ENGINE == "chatterbox"
                                   else DEFAULT_VOICE,
-                         "engine": ENGINE, "device": self.device})
+                         "engine": ENGINE, "device": self.device,
+                         "lang": lang, "lang_setting": LANG_CODE,
+                         "lang_name": LANGUAGES.get(lang, lang),
+                         "languages": language_report()})
 
     def do_POST(self):
         if self.path != "/synthesize":
@@ -376,15 +519,35 @@ class Handler(BaseHTTPRequestHandler):
 
         text = (payload.get("text") or "").strip()[:MAX_CHARS]
         voice = payload.get("voice") or DEFAULT_VOICE
+        lang = payload.get("lang") or None
         if not text:
             self._json(400, {"error": "no text"})
             return
+        if lang and lang != "auto" and lang not in LANGUAGES:
+            self._json(400, {"error": f"unknown language {lang!r}"})
+            return
+        if lang and lang != "auto" and not language_available(lang):
+            self._json(409, {"error": f"{LANGUAGES[lang]} needs an extra package",
+                             "lang": lang, "needs": EXTRAS[lang]["pip"]})
+            return
+        if lang == "auto":
+            lang = None
 
         try:
-            wav = synthesize(text, voice, self.device)
-        except Exception:
+            wav = synthesize(text, voice, self.device, lang)
+        except Exception as exc:
             log.exception("Synthesis failed")
-            self._json(500, {"error": "synthesis failed"})
+            # A voice name that does not exist surfaces as a 404 from the
+            # HuggingFace download, several frames down. Reported plainly,
+            # because "synthesis failed" for a typo sends you looking at the
+            # model, the device and the audio path before the spelling.
+            blob = f"{type(exc).__name__}: {exc}"
+            if "404" in blob or "EntryNotFound" in blob:
+                self._json(404, {"error": f"No such voice: {voice!r}. Voice "
+                                          "names look like bf_emma or af_heart.",
+                                 "voice": voice})
+            else:
+                self._json(500, {"error": "synthesis failed", "detail": blob[:200]})
             return
 
         self.send_response(200)
@@ -395,6 +558,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    # Declared up front: argparse reads DEFAULT_VOICE below as a default value,
+    # and Python rejects a global statement that comes after the name is used.
+    global ENGINE, VOICE_REF, LANG_CODE, DEFAULT_VOICE
     ap = argparse.ArgumentParser()
     # 127.0.0.1 by default. Pass 0.0.0.0 to reach the log page from another
     # machine — a firewall rule alone cannot do it, because loopback means
@@ -414,11 +580,31 @@ def main():
                          "chatterbox is ~35x slower and does not")
     ap.add_argument("--voice-ref", default="",
                     help="chatterbox only: a few seconds of the voice to clone")
+    ap.add_argument("--voice", default=DEFAULT_VOICE,
+                    help="the voice the bot is configured to use. Only affects "
+                         "which phonemiser is preloaded and what /health "
+                         "reports; the bot names a voice on every request.")
+    ap.add_argument("--lang", default="auto",
+                    help="phonemiser language: auto (derive from the voice "
+                         "name's first letter) or one of "
+                         + ", ".join(sorted(LANGUAGES)))
     ap.add_argument("--preload", action="store_true",
                     help="load the model at startup instead of on first request")
     args = ap.parse_args()
 
-    global ENGINE, VOICE_REF
+    if args.lang != "auto" and args.lang not in LANGUAGES:
+        ap.error(f"--lang {args.lang!r} is not a language Kokoro publishes "
+                 "voices for; choose auto or one of "
+                 + ", ".join(f"{k} ({v})" for k, v in sorted(LANGUAGES.items())))
+    if args.lang != "auto" and not language_available(args.lang):
+        # Refused at startup rather than on the first spoken line: a speech
+        # service that starts happily and then throws the first time she tries
+        # to talk is far worse than one that will not start.
+        ap.error(f"--lang {args.lang} ({LANGUAGES[args.lang]}) needs a package "
+                 f"that is not installed. Install it with:\n"
+                 f"  tts/.venv/bin/python -m pip install '{EXTRAS[args.lang]['pip']}'")
+    LANG_CODE = args.lang
+    DEFAULT_VOICE = args.voice
     ENGINE = args.engine
     VOICE_REF = args.voice_ref
     Handler.device = args.device
@@ -432,7 +618,7 @@ def main():
         if ENGINE == "chatterbox":
             _chatterbox(args.device)
         else:
-            get_pipeline(args.device)
+            get_pipeline(args.device, lang_for(DEFAULT_VOICE))
 
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     log.info("Listening on http://%s:%d  (device=%s)", args.host, args.port, args.device)
