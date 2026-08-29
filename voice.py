@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+from logging.handlers import RotatingFileHandler
 import os
 import re
 import sys
@@ -553,10 +554,18 @@ def open_tuning_log(path: str):
     for old in list(logger.handlers):
         logger.removeHandler(old)
         old.close()
-    handler = logging.FileHandler(target, encoding="utf-8")
+    # Rotating, not plain. This file gets one line per utterance in a room
+    # where people are talking to each other all evening — it reached 700 KB in
+    # a couple of days here — and an unbounded record of everything said within
+    # earshot is not something to leave growing quietly on disk.
+    max_bytes = int(max(0.1, config.VOICE_TUNING_MAX_MB) * 1024 * 1024)
+    handler = RotatingFileHandler(target, maxBytes=max_bytes,
+                                  backupCount=max(0, config.VOICE_TUNING_KEEP),
+                                  encoding="utf-8")
     handler.setFormatter(logging.Formatter("%(asctime)s | %(message)s", "%H:%M:%S"))
     logger.addHandler(handler)
-    log.info("Voice tuning log: %s", target)
+    log.info("Voice tuning log: %s (max %.1f MB, keeping %d)",
+             target, config.VOICE_TUNING_MAX_MB, config.VOICE_TUNING_KEEP)
     return logger
 
 

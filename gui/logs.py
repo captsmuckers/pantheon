@@ -32,6 +32,8 @@ LOGDIR = ROOT / "logs"
 # one you are shown.
 STREAMS = (
     ("athena", "Athena", "athena-*.log", "what the bot did"),
+    ("heard", "Heard", "voice-tuning.log",
+     "every utterance the microphone picked up, and the verdict it got"),
     ("tts", "Speech", "tts-*.log", "what it said, and how long it took to say it"),
     ("mpv", "Player", "mpv-stderr.log", "mpv's own complaints"),
     ("launchd", "Supervisor", "athena-launchd-stderr.log",
@@ -39,6 +41,12 @@ STREAMS = (
 )
 
 LEVELS = re.compile(r"\b(CRITICAL|ERROR|WARNING|WARN|INFO|DEBUG)\b")
+
+# The verdicts in the tuning log, which has no levels of its own. Colouring
+# them is what makes that file readable: it is overwhelmingly NOISE and NO-WAKE
+# — 5,500 of 5,522 lines in one real sample — and the handful of WAKE lines are
+# the only ones anybody is ever looking for.
+VERDICTS = re.compile(r"\|\s*(WAKE|NO-WAKE|NOISE|ECHO|STT-TIMEOUT)\s*\|")
 
 
 def available() -> list:
@@ -116,15 +124,21 @@ def since(path: Path, offset: int) -> tuple:
 
 
 def as_html(text: str) -> str:
-    """Escaped, with the level word wrapped so CSS can colour it.
+    """Escaped, with the level or verdict wrapped so CSS can colour it.
 
-    Escaped FIRST and then marked up: a log line contains whatever a Discord
-    user typed, and this is rendered into a page that can hold a token field.
+    Escaped FIRST and then marked up: a log line contains whatever somebody
+    said out loud or typed into Discord, and this is rendered into a page that
+    also holds a token field.
     """
     out = []
     for line in text.splitlines():
         safe = html.escape(line)
-        safe = LEVELS.sub(lambda m: f'<b class="lv {m.group(1).lower()}">{m.group(1)}</b>',
-                          safe, count=1)
-        out.append(safe)
+        marked = LEVELS.sub(
+            lambda m: f'<b class="lv {m.group(1).lower()}">{m.group(1)}</b>',
+            safe, count=1)
+        if marked == safe:
+            marked = VERDICTS.sub(
+                lambda m: f'| <b class="vd {m.group(1).lower()}">{m.group(1)}</b> |',
+                safe, count=1)
+        out.append(marked)
     return "\n".join(out)

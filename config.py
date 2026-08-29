@@ -396,11 +396,28 @@ VOICE_SPEAKER_TOLERANCE_MS = _int("VOICE_SPEAKER_TOLERANCE_MS", 1500)
 
 # A dedicated file recording every utterance, the verdict it got, and what the
 # bot did about it — the raw material for tuning the wake list against a real
-# room. Separate from the bot's own log, which records only the shape of an
-# utterance because everyone's conversation passes through the transcriber.
-# Blank turns it off entirely; relative paths resolve next to the code.
-# On by default for now — turn it off once the wake word is dialled in.
-VOICE_TUNING_LOG = os.getenv("VOICE_TUNING_LOG", "").strip() or "logs/voice-tuning.log"
+# room. Separate from the bot's own log, which records only the SHAPE of an
+# utterance ("3.9s: NO-WAKE (13 words)") because everyone's conversation passes
+# through the transcriber and most of it is people talking to each other.
+#
+# This file is the one place those words are written down, which is why turning
+# it off is a single switch rather than an audit of every log line.
+#
+# The comment here used to claim a blank path turned it off. It did not: the
+# `or` below meant blank fell back to the default, so there was in fact no way
+# to stop recording what the room said. VOICE_TUNING_ENABLED is that way.
+VOICE_TUNING_ENABLED = _bool("VOICE_TUNING_ENABLED", True)
+VOICE_TUNING_LOG = (
+    (os.getenv("VOICE_TUNING_LOG", "").strip() or "logs/voice-tuning.log")
+    if VOICE_TUNING_ENABLED else ""
+)
+
+# Rotation, because this grows without limit and nobody notices until it is
+# hundreds of megabytes of other people's conversation. Size in megabytes, and
+# how many old files to keep beside the current one; 0 keeps none, so the log
+# never exceeds the size below.
+VOICE_TUNING_MAX_MB = _float("VOICE_TUNING_MAX_MB", 5.0)
+VOICE_TUNING_KEEP = _int("VOICE_TUNING_KEEP", 3)
 
 # Save each utterance as a WAV — exactly the 16 kHz mono buffer Whisper was
 # given — so a mis-heard command can be listened to rather than guessed at.

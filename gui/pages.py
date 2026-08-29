@@ -61,10 +61,15 @@ def settings_page() -> str:
      configuration once, at startup.</p>
   <label class="inline"><input type="checkbox" id="show-advanced"> Show advanced
      settings</label>
+  <input type="search" id="setting-filter" placeholder="Filter settings…"
+         autocomplete="off" spellcheck="false">
 </section>
 
 <form id="settings-form" autocomplete="off">
-  <div id="sections"><p class="loading">Loading…</p></div>
+  <div class="settings-body">
+    <nav class="secnav" id="secnav"></nav>
+    <div id="sections"><p class="loading">Loading…</p></div>
+  </div>
   <div class="savebar" id="savebar" hidden>
     <span id="save-summary"></span>
     <button type="button" class="ghost" id="revert">Revert</button>

@@ -224,11 +224,25 @@ SETTINGS: tuple[Setting, ...] = (
        advanced=True,
        help="Leave headroom: on a busy channel this runs almost continuously, "
             "and starving the audio system makes playback break up."),
+    _s("VOICE_TUNING_ENABLED", "bool", default=True, section="Voice",
+       help="Write down what the room says. Every utterance the microphone "
+            "picks up — including conversations not addressed to the bot — is "
+            "transcribed and recorded with the verdict it got. It is how you "
+            "tune the wake word against a real room, and it is a record of "
+            "what people said near the microphone. Turn it off and nothing is "
+            "written; the bot still hears and still responds."),
     _s("VOICE_TUNING_LOG", "path", default="logs/voice-tuning.log",
        section="Voice", advanced=True,
-       help="Every utterance and the verdict it got — the raw material for "
-            "tuning the wake list. This is the one place the words are written "
-            "down, so blank turns it off in one place rather than an audit."),
+       help="Where that record goes. Relative paths resolve next to the code."),
+    _s("VOICE_TUNING_MAX_MB", "float", default=5.0, lo=0.1, hi=500.0,
+       section="Voice", advanced=True,
+       help="Rotate once the file passes this size, in megabytes. A busy room "
+            "produces a line per utterance and this grew to 700 KB in two days, "
+            "so it is bounded rather than left to run."),
+    _s("VOICE_TUNING_KEEP", "int", default=3, lo=0, hi=50,
+       section="Voice", advanced=True,
+       help="How many rotated files to keep beside the current one. 0 keeps "
+            "none, so nothing older than the current file survives."),
 
     # -- Speech output ------------------------------------------------
     _s("TTS_ENABLED", "bool", default=False, section="Speech", restart="bot",
