@@ -65,7 +65,9 @@ UNLISTED = {
 # Settings read by the shell launchers rather than by Python. scripts/_common.sh
 # picks the TTS interpreter and flags out of .env before the server starts, so
 # these never pass through config.py and an AST walk cannot see them.
-LAUNCHER_READ = {"TTS_ENGINE", "TTS_VOICE_REF", "TTS_LANG_CODE"}
+LAUNCHER_READ = {"TTS_ENGINE", "TTS_VOICE_REF", "TTS_LANG_CODE",
+                 "STREAM_AUDIO_ENABLED", "STREAM_AUDIO_DEVICE",
+                 "STREAM_AUDIO_MONITOR"}
 
 # Python files that read settings. flavor.py reads its own length limit rather
 # than routing it through config, so scanning config.py alone reported a real

@@ -288,6 +288,27 @@ SETTINGS: tuple[Setting, ...] = (
     _s("TTS_ACK_LINES", "str", section="Speech", advanced=True,
        default="Mm. || Fine. || One moment. || If I must. || Working on it.",
        help="Separated by ||. Delete the acks directory to re-render."),
+    _s("STREAM_AUDIO_ENABLED", "bool", default=False, section="Speech",
+       restart="none",
+       help="Route media audio through a clean virtual device so a Discord "
+            "screen share captures it unprocessed. Without this, macOS renders "
+            "through the built-in speaker route, which applies loudness and "
+            "protection processing tuned for small drivers — the share then "
+            "captures that, and music arrives bass-light with the level "
+            "pumping. Off by default because it changes the machine's default "
+            "output device. Applied by scripts/setup-stream-audio.py."),
+    _s("STREAM_AUDIO_DEVICE", "str", default="BlackHole 64ch", section="Speech",
+       restart="none", advanced=True,
+       help="The clean virtual device to route media through. Deliberately a "
+            "THIRD device, separate from the two the voice pipeline uses — "
+            "reusing those would mix music into what the transcriber hears and "
+            "wreck wake-word detection. Install with: "
+            "brew install --cask blackhole-64ch"),
+    _s("STREAM_AUDIO_MONITOR", "str", section="Speech", restart="none",
+       advanced=True,
+       help="Paired with the clean device so anyone at the machine still hears "
+            "sound, and so the pair has a real hardware clock to follow. Blank "
+            "detects the built-in output automatically."),
     _s("TTS_OUTPUT_DEVICE", "str", default="BlackHole 16ch", section="Speech",
        platform="darwin", restart="bot",
        help="The return cable, feeding Discord's microphone. A SECOND device, "

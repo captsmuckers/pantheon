@@ -344,7 +344,48 @@ do not reach it.
 
 ---
 
-### 9. Start on login (optional)
+### 9. Stream audio (optional, but do it if you screen-share)
+
+If people watch through a Discord screen share, media will sound compressed and
+bass-light unless you route it away from the built-in output.
+
+The cause is not Discord. macOS renders audio for the built-in speakers through
+a loudness and protection curve tuned for small drivers, and a screen share
+captures that processed mix — even with nobody in the room. It arrives with the
+bass pulled down and the level pumping as the material changes, and it gets
+*worse* with better source material, because higher dynamic range gives the
+limiter more to react to.
+
+```bash
+brew install --cask blackhole-64ch
+```
+
+Then turn on **`STREAM_AUDIO_ENABLED`** in Settings → Speech and run:
+
+```bash
+scripts/setup-stream-audio.py          # create the device and select it
+scripts/setup-stream-audio.py --status # report, change nothing
+scripts/setup-stream-audio.py --revert # back to the built-in output
+```
+
+That builds a Multi-Output Device pairing the clean virtual device with your
+normal output — so anyone at the machine still hears sound, and the pair has a
+real hardware clock to follow — and makes it the system default. mpv, Spotify
+and the browser follow it; **the bot's own audio does not move**, because TTS is
+pinned by `TTS_OUTPUT_DEVICE` and Discord's own devices are set inside Discord.
+
+**64ch is a deliberately separate third device.** Do not reuse the 2ch/16ch
+devices from the voice setup: those carry the bot's ears and mouth, and mixing
+music into them feeds song lyrics to the transcriber and wrecks wake-word
+detection.
+
+Nothing changes inside Discord — its screen share follows the system default
+output on its own.
+
+One caveat: this device exists in memory only and does not survive a reboot,
+which is why step 10 installs a LaunchAgent to rebuild it at every login.
+
+### 10. Start on login (optional)
 
 Press **"Do this for me"** on the last setup step, or:
 
@@ -353,9 +394,15 @@ scripts/install-launchagents.sh              # install and start
 scripts/install-launchagents.sh --uninstall  # stop and remove
 ```
 
-This writes the two LaunchAgents with the right absolute paths for your
-checkout and loads them. Both services then start when you log in and restart
-if they crash.
+This writes the LaunchAgents with the right absolute paths for your checkout
+and loads them: the bot, the speech server, **the control panel**, and — if
+`STREAM_AUDIO_ENABLED` is on — the audio routing. They start when you log in
+and restart if they crash.
+
+The control panel matters most here. Without it the panel survives exactly
+until the next reboot, which is when you need it most: it is how you start
+everything else, so needing physical access to start the thing that gives you
+remote access defeats the point.
 
 After that, use the control panel's Start and Stop rather than the scripts:
 launchd's `KeepAlive` will undo anything else within ten seconds.

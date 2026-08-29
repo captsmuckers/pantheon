@@ -72,10 +72,10 @@ PLIST
 # agent loaded. Polling until the label is gone is the fix; the sleep is not
 # decoration.
 unload() {
-    for label in com.athena.bot com.athena.tts; do
+    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.streamaudio; do
         launchctl bootout "gui/$UID_NUM/$label" 2>/dev/null || true
     done
-    for label in com.athena.bot com.athena.tts; do
+    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.streamaudio; do
         i=0
         while launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1; do
             sleep 0.5
@@ -90,7 +90,8 @@ unload() {
 
 if [[ "${1:-}" == "--uninstall" ]]; then
     unload
-    rm -f "$AGENTS/com.athena.bot.plist" "$AGENTS/com.athena.tts.plist"
+    rm -f "$AGENTS/com.athena.bot.plist" "$AGENTS/com.athena.tts.plist" \
+          "$AGENTS/com.athena.gui.plist" "$AGENTS/com.athena.streamaudio.plist"
     echo "Removed. Athena will not start at login."
     exit 0
 fi
@@ -103,11 +104,50 @@ unload
 
 plist_for com.athena.tts    launchd-tts.sh    tts    > "$AGENTS/com.athena.tts.plist"
 plist_for com.athena.bot    launchd-athena.sh athena > "$AGENTS/com.athena.bot.plist"
+# The control panel too. Without this it survives exactly until the next
+# reboot, which is precisely when someone needs it most: the panel is how you
+# start everything else, and needing physical access to start the thing that
+# gives you remote access defeats the point of it.
+plist_for com.athena.gui    start-gui.sh      gui    > "$AGENTS/com.athena.gui.plist"
 echo "Wrote:"
 echo "  $AGENTS/com.athena.tts.plist"
 echo "  $AGENTS/com.athena.bot.plist"
+echo "  $AGENTS/com.athena.gui.plist"
 
-for label in com.athena.tts com.athena.bot; do
+# Stream audio routing, only when it is actually turned on. It is a one-shot
+# at login rather than a supervised service: it makes the device, selects it,
+# and exits. KeepAlive would respawn it forever for nothing, and the script
+# already waits for the virtual driver itself rather than needing a retry.
+if [ "$(env_value STREAM_AUDIO_ENABLED false)" = "true" ]; then
+    cat > "$AGENTS/com.athena.streamaudio.plist" <<STREAMPLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.athena.streamaudio</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$(pick_python)</string>
+        <string>$ROOT/scripts/setup-stream-audio.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>$ROOT</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>$ROOT/logs/streamaudio.log</string>
+    <key>StandardErrorPath</key>
+    <string>$ROOT/logs/streamaudio.log</string>
+</dict>
+</plist>
+STREAMPLIST
+    echo "  $AGENTS/com.athena.streamaudio.plist"
+fi
+
+LABELS="com.athena.tts com.athena.bot com.athena.gui"
+[ -f "$AGENTS/com.athena.streamaudio.plist" ] && LABELS="$LABELS com.athena.streamaudio"
+for label in $LABELS; do
     i=0
     until launchctl bootstrap "gui/$UID_NUM" "$AGENTS/$label.plist" 2>/dev/null; do
         i=$((i + 1))

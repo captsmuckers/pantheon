@@ -36,6 +36,9 @@ STREAMS = (
      "every utterance the microphone picked up, and the verdict it got"),
     ("tts", "Speech", "tts-*.log", "what it said, and how long it took to say it"),
     ("mpv", "Player", "mpv-stderr.log", "mpv's own complaints"),
+    ("health", "Health", "system-health.log",
+     "CPU, memory and swap, sampled every 20s — for tracking down audio "
+     "choppiness against what else was running at the time"),
     ("launchd", "Supervisor", "athena-launchd-stderr.log",
      "why launchd could not start it"),
 )
