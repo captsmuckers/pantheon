@@ -286,6 +286,35 @@ def _check_voice() -> dict:
                        ".venv/bin/python -m pip install -r requirements-dev.txt")}
 
 
+def _check_firefox() -> dict:
+    """Firefox, for YouTube links that hit the age gate.
+
+    yt-dlp cannot get past an age gate reliably — an authenticated client gets
+    zero usable formats — so the fallback does not try. It opens the ordinary
+    youtube.com page in a signed-in Firefox and lets YouTube's own player
+    handle it, the way it would for a person.
+
+    Not offered as a button: the cask can ask for a password, and a background
+    job waiting on a password prompt nobody can see is worse than a command to
+    paste. The profile also has to be created and signed into by hand.
+    """
+    candidates = ["/Applications/Firefox.app/Contents/MacOS/firefox",
+                  os.path.expanduser("~/Applications/Firefox.app/Contents/MacOS/firefox")]
+    found = shutil.which("firefox") or next(
+        (c for c in candidates if Path(c).exists()), None)
+    return {"key": "firefox", "title": "Age-restricted YouTube (optional)",
+            "why": "Age-gated YouTube links open in a signed-in Firefox, "
+                   "because yt-dlp cannot get past the gate. Everything else "
+                   "on YouTube works without this.",
+            "state": "ok" if found else "optional",
+            "detail": found or "Firefox not installed — age-gated links will "
+                               "report that they cannot be played",
+            "fix": None,
+            "manual": "brew install --cask firefox\n"
+                      "# then create the profile and sign in to YouTube in it:\n"
+                      "/Applications/Firefox.app/Contents/MacOS/firefox -P"}
+
+
 def _check_launchagents() -> dict:
     """Whether the bot starts at login and restarts if it crashes.
 
@@ -320,7 +349,7 @@ def _check_launchagents() -> dict:
 
 CHECKS = (_check_brew, _check_python, _check_tools, _check_bot_venv,
           _check_env, _check_ollama, _check_permissions, _check_speech,
-          _check_voice, _check_launchagents)
+          _check_voice, _check_firefox, _check_launchagents)
 
 
 def probe() -> dict:

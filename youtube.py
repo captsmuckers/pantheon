@@ -66,7 +66,18 @@ class AgeRestricted(Exception):
         super().__init__(f"age-restricted: {url}")
 
 
-_AGE_GATE_PHRASES = ("confirm your age", "age-restricted", "inappropriate for some users")
+# Taken from yt-dlp's own AGE_GATE_REASONS (extractor/youtube/_video.py), so
+# that this list tracks the thing it is matching rather than being guessed at.
+# The last two are playabilityStatus values rather than prose; they are not
+# expected in an exception message, and are here because yt-dlp treats them as
+# the same condition and it costs nothing to agree.
+#
+# Deliberately NOT matched: "sign in to confirm you're not a bot". That is
+# YouTube's bot check, not an age gate, and treating it as one would open a
+# browser for a video that a browser cannot help with either.
+_AGE_GATE_PHRASES = ("confirm your age", "age-restricted",
+                     "inappropriate for some users",
+                     "age_verification_required", "age_check_required")
 
 
 def _looks_age_restricted(exc: Exception) -> bool:

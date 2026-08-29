@@ -253,7 +253,32 @@ Two things that produce silence rather than an error:
 
 ---
 
-### 8. Start on login (optional)
+### 8. Age-restricted YouTube (optional)
+
+yt-dlp cannot reliably get past YouTube's age gate — an authenticated client is
+served zero usable formats, so supplying cookies makes it worse rather than
+better. The fallback does not try: it opens the ordinary youtube.com page in a
+signed-in Firefox and lets YouTube's own player handle it.
+
+Everything else on YouTube works without this. If you skip it, age-gated links
+report that they cannot be played.
+
+```bash
+brew install --cask firefox
+/Applications/Firefox.app/Contents/MacOS/firefox -P
+```
+
+Create a profile named **Athena** (or set `BROWSER_PROFILE`), sign in to
+YouTube inside it, and play one video by hand — a fresh profile has no
+interaction history with youtube.com and Firefox silently blocks autoplay
+without one.
+
+There is no playback control once a video opens this way: pause, seek and stop
+do not reach it.
+
+---
+
+### 9. Start on login (optional)
 
 Press **"Do this for me"** on the last setup step, or:
 
