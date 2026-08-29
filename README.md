@@ -1,244 +1,201 @@
-# Athena
+# Pantheon
 
-A Discord bot that runs the media in a room: Plex films and shows through mpv,
-music through Spotify, YouTube on request, karaoke lyrics over the idle screen —
-and it will talk back, in a voice best described as unimpressed.
+A Discord bot that runs the media in a room. Ask it in plain English — by
+typing, or out loud — and it plays Plex films and shows through mpv, music
+through Spotify, YouTube and live streams on request, karaoke lyrics over the
+idle screen. It talks back, in a voice best described as unimpressed.
 
-Plex is only a metadata and file source; mpv does the playing.
-
-Requests are handled in tiers so the language model sees as little as possible:
-
-1. `fast_match` — deterministic regex routing for anything unambiguous
-2. `try_direct_play` — library-first scored resolution, then Spotify
-3. the model — only genuinely fuzzy requests ("something with dragons in it")
-
-## What changed and why (the mpv rewrite)
-
-| Old | New |
-|---|---|
-| `client.playMedia()` over Plex Companion | mpv `loadfile` over JSON IPC |
-| Plex owned the play queue | the bot owns the queue (a Python list) |
-| Next episode = hope HTPC remembers | `end-file` event → we load the next file |
-| Subtitle change = stop, sleep 5s, replay | set `sid`, instant, no interruption |
-| Polled the client's `timeline` every 15s | polls mpv locally; never touches a Plex client |
-| Crash = manual restart | watchdog relaunches mpv and resumes position |
-| Slash commands only | plain chat, with slash fallbacks |
-
-## Setup (macOS)
-
-This branch runs on macOS. The Python is cross-platform — `wm.py` picks between
-the Win32 and AppleScript window backends at import — but the two requirements
-files and the `scripts/*.sh` launchers are macOS-only; their Windows
-counterparts are the `.ps1` files, still in `scripts/`.
-
-1. **Install the tools:**
-   ```
-   brew install python@3.13 mpv yt-dlp
-   ```
-   ffmpeg comes along with mpv. Leave `MPV_PATH` blank — brew puts mpv on PATH.
-2. **Install deps:**
-   ```
-   python3.13 -m venv .venv
-   .venv/bin/python -m pip install -r requirements.txt
-   ```
-   Add `-r requirements-dev.txt` as well if you want voice input.
-3. **Grant permissions.** The bot moves mpv and Spotify windows around, and
-   that needs two *separate* grants in System Settings > Privacy & Security.
-   Both are asked for once and refused silently forever after if the prompt was
-   dismissed, so they are worth setting deliberately:
-   - **Accessibility** — for whatever runs the bot (Terminal, iTerm, or the
-     Python binary). Without it every window call fails and the bot reports
-     "Couldn't find the Spotify window" for windows that are plainly there.
-   - **Automation** — for controlling Spotify. This is the one that gets
-     missed, because the other prompt looks like it covered everything.
-
-   Screen Recording, for Discord, is a third grant and belongs to Discord
-   rather than to the bot.
-4. **Credentials:** copy `.env.example` to `.env` and fill it in.
-   - Generate a **new** Discord bot token — the old one was committed in plain
-     text and should be treated as compromised.
-   - Reset your Plex token: Plex account settings → Devices → sign out all,
-     then grab a fresh token.
-   - Language backend: Ollama, locally, and there is no remote fallback — the
-     Anthropic backend was removed. Install it:
-     `brew install ollama && ollama serve && ollama pull granite4:3b`. It runs
-     on Metal out of unified memory, so the ~3GB figure from the Windows card
-     is memory shared with everything else, not dedicated VRAM. Without it the
-     bot still handles simple commands (`play X`, `pause`, `back 30s`) and only
-     genuinely fuzzy requests are lost.
-5. **Run:** `.venv/bin/python bot.py`, or `scripts/start-athena.sh` to
-   background it with a log file. `scripts/stop-athena.sh` stops it — use that
-   rather than killing python, because it stops the bot before the mpv it owns
-   (the other order makes the watchdog relaunch mpv instantly) and it sends
-   SIGINT rather than SIGKILL so mpv gets shut down cleanly.
-
-   It must run in your logged-in GUI session: window control needs a real login
-   session, so a LaunchAgent is fine and a LaunchDaemon is not.
-
-Discord Developer Portal: the bot needs the **Message Content Intent** enabled
-(Bot → Privileged Gateway Intents), plus `Manage Channels` if you want the
-status channel topic updated.
-
-## The control panel
-
-A local web UI for everything below: the settings, starting and stopping the
-services, and the logs.
-
-```
-scripts/start-gui.sh
-```
-
-Then open <http://127.0.0.1:8086>. Ctrl-C stops it.
-
-It deliberately depends on **nothing**. No web framework, no virtualenv, and
-Python 3.9 — the version macOS ships — is enough. That is not minimalism for
-its own sake: this is the tool you open when the bot will not start, and a
-broken virtualenv is one of the commonest reasons for that. A panel that needed
-the environment it exists to repair would be missing exactly when it is wanted.
-
-**Settings** are generated from `schema.py`, so every setting the bot reads
-appears here with its help text, its bounds and its type, and a test asserts
-that the two never drift apart. Saving writes `.env` in place — comments,
-ordering and any setting this build has never heard of are all preserved — and
-tells you which service to restart, because `config.py` reads its configuration
-once at startup and nothing takes effect until it does.
-
-**Tokens are write-only.** The server never sends one to the browser, not even
-masked: a stored token shows as "set", with its last four characters so you can
-tell one from another. Leaving the field alone leaves the stored value alone;
-clearing one is a separate, deliberate checkbox.
-
-**Access.** It listens on `127.0.0.1` and nothing else unless you both set a
-password and turn remote access on — enforced where the socket is bound, not
-just in the UI, so hand-editing `.athena-gui.json` cannot open it either.
-Turning remote access on exposes this page, and the token fields on it, to
-everything that can route to this machine. Only do it on a network you trust.
-
-The panel also refuses requests carrying a hostname it does not answer to,
-which is what stops a page on the internet from pointing its own domain at
-`127.0.0.1` and driving the panel through your browser. If you reach it by some
-other name, use `127.0.0.1` instead.
-
-**Two checkouts on one machine** is handled rather than ignored: the panel
-identifies processes by their working directory, so it will tell you a bot is
-running *from somewhere else* rather than reporting Stopped and inviting you to
-start a second one into the same Discord channel.
-
-## The machine this is tuned for
-
-Ported from a Windows box with an RTX 2060 Super (8GB VRAM) to a 14-inch
-MacBook Pro, M1 Max, 32GB unified memory, 10 CPU cores (8 performance + 2
-efficiency), 32 GPU cores. Several defaults changed because of that, and the
-reasoning is in the comments at each one — but the differences worth knowing
-up front:
-
-| | RTX 2060 Super box | This M1 Max |
-|---|---|---|
-| Whisper | CUDA, `medium` | CPU only — no CTranslate2 Metal backend. `small`, measured at 4.8x realtime; `medium` manages just 1.7x |
-| LLM memory budget | 8GB VRAM, hard ceiling | 32GB unified — the ceiling that picked `granite4:3b` is gone |
-| GPU vs stream encoder | Real contention; inference stuttered the share | Encode runs on the media engine, separate silicon from the GPU cores |
-| AV1 video | No hardware decode (Maxwell-era concern) | Still no hardware decode — arrives with M3 |
-| Sleep | Desktop, always on | Laptop; sleep now disabled machine-wide, plus `caffeinate` per run |
-
-Three consequences worth acting on:
-
-- **Sleep had to be dealt with, and has been, twice over.** This machine
-  shipped reporting `sleep 1` on AC as well as battery — a sleeping host drops
-  the Discord gateway and stops mpv. It is now disabled machine-wide
-  (`pmset -a disablesleep 1`; `pmset -g` shows `SleepDisabled 1`), and
-  `scripts/start-athena.sh` still wraps the bot in `caffeinate -dis` because
-  `-d` also blocks *display* sleep, which matters on its own account when the
-  screen is what's being shared. If you start `bot.py` by hand, wrap it
-  yourself.
-- **The Ollama model was chosen against an 8GB VRAM ceiling that no longer
-  exists.** `granite4:3b` won its bake-off partly on fitting in 3GB. With 32GB
-  unified there is room for something far larger, and `tests/test_no_fake_actions.py`
-  is the suite that decided it last time — the choice was measurement-driven, so
-  re-measure rather than assuming bigger is better.
-- **`OLLAMA_NUM_GPU=0` and `FLAVOR_NUM_GPU=0` are probably obsolete here.** Both
-  existed to keep inference off a GPU that was also encoding the stream. On
-  Apple silicon those are different blocks, and there is no separate VRAM to
-  free. Leave them blank unless a stutter is actually measured.
-
-Being a laptop matters in one more way: window control and screen sharing need
-a real logged-in session, so closing the lid without an external display and
-power will stop everything.
-
-## Talking to it
-
-Anything in the allowed channel that doesn't start with a punctuation prefix is
-treated as a request:
+The bot is called **Athena** by default. You can rename her; Pantheon is the
+project, she is the one who shows up.
 
 ```
 put on the office s3e5
 what's playing?
 skip ahead 5 minutes
 queue up dune part two after this
-what did he say          → jumps back 15s
+what did he say          → jumps back 15 seconds
 turn the subs off
 it's frozen              → relaunches the player
 ```
 
-Slash commands still exist as a fallback: `/play /queue /status /pause /skip
-/stop /restart /help`.
+Plex is only a metadata and file source — mpv does the playing, which is why
+subtitle changes are instant and a crashed player resumes where it stopped.
 
-## Tuning
+Requests are handled in tiers, so the language model sees as little as possible:
 
-- `MPV_EXTRA_OPTS` takes any mpv options, comma separated. On Apple silicon
-  `hwdec=videotoolbox` and `vo=gpu-next` are the defaults to want —
-  videotoolbox decodes on the media engine rather than the GPU proper, which
-  leaves the GPU to whatever is encoding the screen share. Drop `vo=gpu-next`
-  if you see artifacting.
-- `FREEZE_TIMEOUT` (default 45s) is how long playback can stall before the
-  watchdog reloads the file at the last known position.
-- `AUTOPLAY_NEXT_EPISODE=false` if you'd rather it stop at the end of an episode.
+1. **`fast_match`** — deterministic regex routing for anything unambiguous
+2. **`try_direct_play`** — library-first scored resolution, then Spotify
+3. **the model** — only genuinely fuzzy requests ("something with dragons in it")
 
-## Troubleshooting
+Most of what you say never reaches a model at all. That is deliberate: it is
+faster, and it cannot hallucinate an action it never saw.
 
-**mpv won't start:** run `mpv --version` in the same shell. If that works but
-the bot can't spawn it, set `MPV_PATH` to the absolute path.
+---
 
-**"Couldn't find the Spotify window" when Spotify is clearly open:** this is
-almost always the Accessibility grant, not the window. macOS refuses window
-queries silently, which is indistinguishable from an absent window from the
-bot's side — `macctl.py` logs a specific error the first time it happens, so
-check the log. Transport control (play/pause/skip) uses **Automation**
-permission instead, which is a separate grant that can be missing on its own.
+## What you need
 
-**Nothing plays but no error:** check the console for the direct-play URL. If
-Plex is on another machine, the bot's host must be able to reach `PLEX_URL`
-directly — there's no transcode fallback, mpv plays the original file.
+**A Mac with Apple silicon.** Developed and run on an M1 Max. An M-series with
+16GB will work; the defaults assume unified memory and a Metal-capable GPU, and
+`config.py` explains each choice where it is made. Intel Macs are not tested.
 
-**A file genuinely won't direct play** (rare — mpv handles almost everything):
-add `MPV_EXTRA_OPTS=hwdec=no` to rule out hardware decode first.
+**It must run in a logged-in GUI session.** The bot moves mpv and Spotify
+windows around, and window control needs a real login session — a LaunchAgent
+is fine, a LaunchDaemon is not. Close the lid with no external display and
+everything stops.
 
-**There is an orange dot in the corner of the screen.** That is macOS's
-microphone-in-use indicator, and it is on because the bot holds an open capture
-stream on BlackHole 2ch the whole time voice is enabled. It cannot be turned
-off: WindowServer draws it above all application content precisely so that no
-app can record without it showing, and there is no setting, plist or
-entitlement that suppresses it. Tried and did NOT help: `--native-fs=no` on
-mpv, on the theory that non-native fullscreen would keep the menu bar and its
-indicators off the film. The dot appears over the film either way.
+**Accounts and services:**
 
-The only real lever is not holding the microphone open — `VOICE_ENABLED=false`
-removes the dot and voice input together. Releasing the stream only while a
-film plays would work too, at the cost of no voice commands during films, which
-is when they are most wanted.
+| | for | required |
+|---|---|---|
+| Discord bot token | the bot itself | yes |
+| Plex server + token | films and shows | yes |
+| Ollama, running locally | fuzzy requests and conversation | recommended |
+| Spotify developer app | music | optional |
 
-**Nothing is transcribed even though voice is on**, or she never speaks: the
-audio cables. macOS has no built-in loopback, so both directions need a virtual
-device, and the bot logs exactly which one is missing and how to install it.
+Without Ollama the bot still handles anything unambiguous — `play X`, `pause`,
+`back 30s` — and only genuinely fuzzy requests are lost. There is no cloud
+fallback and no API key to buy; the model runs on your machine.
 
-The Windows machine used two VB-Audio cables. The macOS equivalent is two
-BlackHole devices — two, not one, because a single device shared by both
-directions would feed her own voice straight back into her ears:
+**Disk:** about 2GB for the bot, plus ~2GB more if you want voice input and
+speech.
 
+---
+
+## Quick start
+
+```bash
+git clone https://github.com/captsmuckers/pantheon.git
+cd pantheon
+brew install python@3.13 mpv yt-dlp
+python3.13 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+cp .env.example .env
+scripts/start-gui.sh
 ```
+
+Then open **<http://127.0.0.1:8086>** and fill in the settings there. The
+control panel needs no virtualenv and runs on the Python macOS already ships,
+so it works before any of the above has finished.
+
+`.env.example` documents every setting if you would rather edit a file.
+
+### Permissions macOS will ask for
+
+Two **separate** grants in System Settings → Privacy & Security. Both are asked
+for once and refused silently forever if the prompt is dismissed, so they are
+worth granting deliberately:
+
+- **Accessibility** — for whatever runs the bot (Terminal, iTerm, or the Python
+  binary). Without it every window call fails and the bot reports "Couldn't
+  find the Spotify window" for windows that are plainly there.
+- **Automation** — for controlling Spotify. This is the one that gets missed,
+  because the first prompt looks like it covered everything.
+
+Screen Recording is a third grant, and it belongs to Discord rather than to the
+bot.
+
+### On the Discord side
+
+The bot needs the **Message Content Intent** enabled (Developer Portal → Bot →
+Privileged Gateway Intents), or it will connect and then ignore every message.
+Add `Manage Channels` if you want it to keep a status channel's topic updated.
+
+---
+
+## The control panel
+
+```bash
+scripts/start-gui.sh          # then http://127.0.0.1:8086
+```
+
+Settings, service start/stop, and live logs. Ctrl-C stops it.
+
+It deliberately depends on **nothing** — no web framework, no virtualenv, and
+Python 3.9 (what macOS ships) is enough. That is not minimalism for its own
+sake: this is the tool you open when the bot will not start, and a broken
+virtualenv is one of the commonest reasons for that. A panel that needed the
+environment it exists to repair would be missing exactly when it is wanted.
+
+**Settings** are generated from `schema.py`, so every setting the bot reads
+appears with its help text, type and bounds, and a test asserts the two never
+drift. Saving rewrites `.env` in place — comments, ordering and any setting
+this build has never heard of all survive — and tells you which service to
+restart, because configuration is read once at startup and nothing takes effect
+until it is.
+
+**Voices can be auditioned before saving.** Browse all 54 Kokoro voices, click
+one, hear it. Japanese and Mandarin need an extra package and the panel offers
+to install it.
+
+**Tokens are write-only.** No response from the server ever contains a stored
+secret — a set token shows as "set" plus its last four characters, so you can
+tell one from another and nothing more. Leaving a token field alone leaves the
+stored value alone.
+
+**Access.** It listens on `127.0.0.1` and nothing else unless you both set a
+password and turn remote access on — enforced where the socket is bound, not
+merely in the UI. Turning remote access on exposes this page, and the token
+fields on it, to everything that can route to your machine. Only on a network
+you trust.
+
+It also refuses requests carrying a hostname it does not answer to, which is
+what stops a page on the internet pointing its own domain at `127.0.0.1` and
+driving the panel through your browser. Reach it as `127.0.0.1`.
+
+---
+
+## Running it
+
+```bash
+scripts/start-athena.sh       # background, with a log file
+scripts/stop-athena.sh        # stops the bot, then the mpv it owns
+```
+
+Use the stop script rather than killing Python. It stops the bot *before* the
+mpv it owns — the other order makes the watchdog relaunch mpv instantly — and
+it sends SIGINT rather than SIGKILL, so mpv shuts down cleanly instead of
+leaving a fullscreen window behind.
+
+To start on login, install the LaunchAgents with `scripts/launchd-*.sh`. After
+that, use the control panel's Start and Stop rather than the scripts: launchd's
+`KeepAlive` will undo anything else within ten seconds.
+
+Slash commands exist as a fallback: `/play /queue /status /pause /skip /stop
+/restart /help`.
+
+---
+
+## Voice and speech
+
+Both are optional and off by default. Turn them on in the panel.
+
+**Speech** uses [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an 82M
+model that runs on the GPU and produces a line in about a second. It needs its
+own virtualenv, because it pins a different Python and torch than the bot:
+
+```bash
+brew install python@3.12
+/opt/homebrew/bin/python3.12 -m venv tts/.venv
+tts/.venv/bin/python -m pip install -r tts/requirements.txt
+scripts/start-tts.sh
+```
+
+3.12, not 3.13 — Kokoro declares `Requires-Python <3.13`.
+
+**Voice input** uses faster-whisper on the CPU, and needs
+`requirements-dev.txt` as well as two virtual audio devices.
+
+### The audio cables
+
+macOS has no built-in loopback, so both directions need a virtual device — two
+of them, not one, because a single shared device would feed her own voice
+straight back into her ears:
+
+```bash
 brew install --cask blackhole-2ch blackhole-16ch
 ```
 
-That installs a system audio driver, so it asks for your password and Discord
+That installs a system audio driver, so it asks for your password, and Discord
 needs restarting afterwards to see the new devices. Then, in Discord:
 
 | direction | device | Discord setting |
@@ -248,8 +205,7 @@ needs restarting afterwards to see the new devices. Then, in Discord:
 
 Routing output to BlackHole means *you* stop hearing it. Fix that with a
 Multi-Output Device in **Audio MIDI Setup** (Applications → Utilities)
-containing both BlackHole 2ch and your speakers, and point Discord at that
-instead.
+containing both BlackHole 2ch and your speakers, and point Discord at that.
 
 Two things that are easy to miss and produce silence rather than an error: the
 streaming account must be **muted, never deafened** — a deafened client
@@ -257,37 +213,140 @@ receives no audio at all, so there is nothing to capture — and Discord will no
 move a live voice connection to a newly selected device, so leave and rejoin
 the channel after changing it.
 
-**Model is being weird:** most requests never reach it — check whether the
-phrasing should have been caught by `fast_match` or `try_direct_play` first,
-since a routing miss looks like a model problem. If it genuinely is the model,
-try a larger one — 32GB unified allows far bigger than the 3B the Windows card
-was limited to — and score candidates with `scripts/bakeoff.py`:
+`scripts/check-audio.py` verifies both directions.
 
-Run these **from the repo root** — they are relative paths, and from anywhere
-else the shell just reports that the file does not exist:
+### What it writes down
 
-```
-cd ~/athena
+With voice on, everything the microphone picks up is transcribed — including
+conversation not addressed to the bot. The bot's own log records only the shape
+of an utterance ("3.9s: NO-WAKE (13 words)"); the words go to a separate file,
+so turning that off is one switch rather than an audit of every log line.
+
+`VOICE_TUNING_ENABLED` is that switch, and it is **on** by default because it
+is how you tune the wake word against a real room. It rotates at 5MB. If other
+people are in the room, tell them, or turn it off.
+
+---
+
+## Why the defaults are what they are
+
+This started on a Windows box with an RTX 2060 Super and moved to Apple
+silicon. Several defaults changed as a result, and the reasoning sits in the
+comments beside each one. The differences worth knowing up front:
+
+| | 8GB discrete GPU | Apple silicon |
+|---|---|---|
+| Whisper | CUDA, `medium` | CPU only — CTranslate2 has no Metal backend. `small` measures 4.8x realtime; `medium` manages 1.7x |
+| Model size | 8GB VRAM, hard ceiling | unified memory — the ceiling that picked a 3B model is gone |
+| GPU vs screen encoding | real contention; inference stuttered the share | encode runs on the media engine, separate silicon |
+| AV1 video | no hardware decode | still none before M3 |
+
+Two consequences worth acting on:
+
+- **Sleep will stop everything.** A sleeping host drops the Discord gateway and
+  stops mpv, and some Macs report `sleep 1` on AC as well as battery. Disable
+  it (`sudo pmset -a disablesleep 1`) if this is a machine that should stay up.
+  The launchers wrap the bot in `caffeinate -dis` regardless, because `-d` also
+  blocks *display* sleep — which matters on its own account when the screen is
+  what is being shared.
+- **The model choice is worth revisiting on your hardware.** It was made by
+  measurement, not preference, and `scripts/bakeoff.py` is how. See below.
+
+---
+
+## Choosing a model
+
+Most requests never reach the model, so a routing miss looks like a model
+problem. Check `fast_match` and `try_direct_play` first.
+
+If it genuinely is the model, score candidates rather than guessing. Run these
+**from the repo root** — they are relative paths:
+
+```bash
 ./scripts/bakeoff.py --list
-./scripts/bakeoff.py --pull granite4:3b qwen3:14b
-./scripts/bakeoff.py -v granite4:3b qwen3:14b --runs 3 --json bakeoff.json
+./scripts/bakeoff.py --pull granite4:3b qwen3:8b
+./scripts/bakeoff.py -v granite4:3b qwen3:8b --runs 3 --json bakeoff.json
 ```
 
-`-v` prints a line per run; without it there is no output until a model has
-finished all its cases, which is a long silence. `--json` keeps the full
-per-run detail, including the actual replies, which is what you want when a
-score looks surprising.
+`bakeoff.py` drives the real Ollama path with the real tool schema and a faked
+Controls, so nothing plays. It ranks on **fabrication rate first** — a model
+that says "Playing X" without calling the tool is worse than a slow one.
 
-It drives the real `_ask_ollama` path with the real tool schema and a faked
-Controls, so nothing plays. It ranks on **fabrication rate first** — that is
-what chose `granite4:3b` over models twice its size, and it does not improve
-just because the machine got bigger. Note that `tests/test_no_fake_actions.py`
-is not a substitute: it scripts a fake HTTP client and never contacts a model.
+`chatoff.py` scores the other half: whether a question is routed to
+conversation at all, and whether the reply is any good. They are different
+skills, and a model can be flawless at picking `play_media` and still be poor
+company.
 
-**It replied with paragraphs of reasoning:** a thinking model with
+`-v` prints a line per run; without it there is no output until a model
+finishes all its cases, which is a long silence.
+
+---
+
+## Troubleshooting
+
+**mpv won't start.** Run `mpv --version` in the same shell. If that works but
+the bot cannot spawn it, set `MPV_PATH` to the absolute path. Under launchd
+this is usually PATH: a LaunchAgent inherits none of your shell's environment.
+
+**"Couldn't find the Spotify window" when Spotify is clearly open.** Almost
+always the Accessibility grant, not the window. macOS refuses window queries
+silently, which is indistinguishable from an absent window. Transport control
+(play/pause/skip) uses **Automation**, a separate grant that can be missing on
+its own.
+
+**Nothing plays but no error.** Check the log for the direct-play URL. If Plex
+is on another machine, the bot's host must reach `PLEX_URL` directly — there is
+no transcode fallback, mpv plays the original file.
+
+**A file genuinely won't play** (rare — mpv handles almost everything). Add
+`MPV_EXTRA_OPTS=hwdec=no` to rule out hardware decode first.
+
+**There is an orange dot in the corner of the screen.** That is macOS's
+microphone-in-use indicator, on because the bot holds an open capture stream
+the whole time voice is enabled. It cannot be turned off: WindowServer draws it
+above all application content precisely so nothing can record without it
+showing. Tried and did *not* help: `--native-fs=no` on mpv. The only real lever
+is `VOICE_ENABLED=false`, which removes the dot and voice input together.
+
+**Nothing is transcribed, or she never speaks.** The audio cables — see above.
+The bot logs exactly which device is missing and how to install it.
+
+**She pronounces things oddly.** The voice and the pronunciation rules are
+separate settings. Kokoro's voice prefix *is* its language code — `af_` is
+American, `bf_` British — and `TTS_LANG_CODE=auto` derives one from the other.
+Setting them inconsistently gives you an American voice reading with British
+rules, which sounds subtly wrong rather than obviously broken.
+
+**It replied with paragraphs of reasoning.** A thinking model with
 `OLLAMA_THINK` set to `true` or `none`. Blank it to send `think: false`.
 
-**It narrated an action instead of doing it** ("Playing **X**" with nothing
-happening): that is the failure mode `tests/test_no_fake_actions.py` exists to
-catch. Run it. Model choice matters more than prompt wording here — see the
-comments above `OLLAMA_MODEL` in `.env.example`.
+**It narrated an action instead of doing it** — "Playing **X**" with nothing
+happening. That is the failure mode `tests/test_no_fake_actions.py` exists to
+catch; run it. Model choice matters more than prompt wording here.
+
+---
+
+## Development
+
+```bash
+.venv/bin/python tests/run_all.py
+```
+
+26 suites, no Plex, Spotify, mpv, Discord — or even a `.env` — required.
+Placeholders are supplied for the four required settings, so a fresh clone
+passes its own tests before you have credentials.
+
+`.env.example` is **generated** from `schema.py`:
+
+```bash
+./scripts/gen-env-example.py
+```
+
+Adding a setting means adding it to `schema.py`. It then appears in the control
+panel, in `.env.example`, and in validation, with no other change — and
+`tests/test_schema.py` fails the build if `config.py` reads a setting the schema
+does not describe, or the schema describes one nothing reads.
+
+Windows has `.ps1` equivalents of the launchers and `winctl.py` for window
+control. `wm.py` picks a backend at import. It is not the primary target and
+the Windows paths are not routinely exercised.
