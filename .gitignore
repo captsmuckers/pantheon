@@ -11,6 +11,14 @@
 .athena-gui.json
 .athena-gui.*.tmp
 
+# Things the person running this supplies, which are theirs and not the
+# project's. The idle image is whatever they want on screen when nothing is
+# playing — the default is mpv's own — and a voice reference is a recording of
+# a real person. Neither belongs in a public repository, and both are exactly
+# the kind of file that gets committed by an absent-minded `git add -A`.
+/idle.png
+/tts/voices/*.wav
+
 # Live OAuth tokens.
 .spotify-cache
 
