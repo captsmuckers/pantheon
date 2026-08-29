@@ -538,6 +538,21 @@ catch; run it. Model choice matters more than prompt wording here.
 
 ---
 
+## Keeping it up to date
+
+The **Status** page checks the repository and shows what is new. Updating is
+two clicks — check, then update — and never happens on its own.
+
+It will only ever **fast-forward**. If you have committed local changes, or
+have uncommitted edits to tracked files, it refuses and tells you which,
+rather than merging or discarding anything. `.env` is untracked, so an update
+cannot touch it.
+
+If a requirements file changed, those are reinstalled as part of the update.
+Afterwards it names the services to restart — except the control panel itself,
+which you restart by hand, because it is the thing serving the page you asked
+from.
+
 ## Development
 
 ```bash
