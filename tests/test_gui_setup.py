@@ -40,7 +40,8 @@ def test_actions_are_a_fixed_menu():
     check("the menu is exactly what is expected",
           set(setup.ACTIONS) == {"brew_python", "brew_tools", "make_venv",
                                  "make_env", "pull_model", "make_tts_venv",
-                                 "install_voice_deps", "install_launchagents"},
+                                 "install_voice_deps", "install_launchagents",
+                                 "start_ollama"},
           str(sorted(setup.ACTIONS)))
 
     # Every argv must be built here, from literals and paths this module

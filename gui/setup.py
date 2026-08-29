@@ -200,15 +200,18 @@ def _check_ollama() -> dict:
         models = None
 
     if models is None:
+        # `brew services start` rather than `ollama serve`: serve runs in the
+        # foreground and would die with the job that started it, leaving a
+        # step that reports success and stops working the moment you look away.
         return {"key": "ollama", "title": "Language model",
                 "why": "Handles fuzzy requests and conversation. Without it the "
                        "bot still does anything unambiguous.",
                 "state": "todo",
                 "detail": ("installed but not running" if installed
                            else "not installed"),
-                "fix": None,
-                "manual": ("ollama serve" if installed
-                           else "brew install ollama && ollama serve")}
+                "fix": "start_ollama" if shutil.which("brew") else None,
+                "manual": ("brew services start ollama" if installed
+                           else "brew install ollama && brew services start ollama")}
     if not models:
         return {"key": "ollama", "title": "Language model",
                 "why": "Running, but no model has been pulled.",
@@ -394,6 +397,14 @@ ACTIONS = {
         "title": "Create the configuration file",
         "steps": lambda: [],          # handled specially: a file copy, not a command
         "note": "Copies .env.example, then you fill it in on the Settings page.",
+    },
+    "start_ollama": {
+        "title": "Install and start Ollama",
+        "steps": lambda: ([["brew", "install", "ollama"]]
+                          if not shutil.which("ollama") else []) +
+                         [["brew", "services", "start", "ollama"]],
+        "note": "Runs it as a background service so it survives a reboot. "
+                "Pull a model afterwards — that step appears once it is up.",
     },
     "pull_model": {
         "title": "Download a language model",

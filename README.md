@@ -94,13 +94,15 @@ brew install python@3.13 mpv yt-dlp
 macOS ships Python 3.9. The control panel runs on it deliberately, but the bot
 needs 3.13. `ffmpeg` arrives with mpv.
 
-**For fuzzy requests and conversation**, install [Ollama](https://ollama.com)
-and leave it running:
+**For fuzzy requests and conversation** you need [Ollama](https://ollama.com).
+The control panel can install and start it for you in step 2, or:
 
 ```bash
 brew install ollama
-ollama serve
+brew services start ollama
 ```
+
+`brew services` rather than `ollama serve`, so it survives a reboot.
 
 Skip it if you like — the bot still handles anything unambiguous (`play X`,
 `pause`, `back 30s`) and only vague requests are lost.
