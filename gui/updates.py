@@ -198,8 +198,12 @@ def apply() -> dict:
 
     from gui import setup as setup_mod
     n = st["behind"]
+    # cwd is passed explicitly. The job runner otherwise defaults to setup's
+    # own ROOT, which is the same directory in production and silently the
+    # WRONG one anywhere else — a test pointed updates at a temporary clone
+    # and the merge ran against the real checkout instead.
     result = setup_mod.start_steps(
-        f"Updating {n} commit{'s' if n != 1 else ''}", steps)
+        f"Updating {n} commit{'s' if n != 1 else ''}", steps, cwd=ROOT)
     result["restarts"] = _restarts_for(st.get("changed", []))
     return result
 

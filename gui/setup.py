@@ -575,7 +575,7 @@ _JOB_LOCK = threading.Lock()
 MAX_LINES = 400
 
 
-def start_steps(title: str, steps: list) -> dict:
+def start_steps(title: str, steps: list, cwd=None) -> dict:
     """Run a prepared list of commands as a background job.
 
     Exposed so the updater can reuse this rather than growing a second job
@@ -587,7 +587,8 @@ def start_steps(title: str, steps: list) -> dict:
     with _JOB_LOCK:
         _JOBS[job_id] = {"action": "steps", "title": title, "lines": [],
                          "done": False, "rc": None, "started": time.time()}
-    threading.Thread(target=_run_job, args=(job_id, steps), daemon=True).start()
+    threading.Thread(target=_run_job, args=(job_id, steps, cwd),
+                     daemon=True).start()
     return {"ok": True, "job": job_id, "title": title}
 
 
@@ -637,7 +638,7 @@ def start(action: str) -> dict:
     return {"ok": True, "job": job_id, "title": spec["title"]}
 
 
-def _run_job(job_id: str, steps: list) -> None:
+def _run_job(job_id: str, steps: list, cwd=None) -> None:
     """Run each step, streaming output into the job so the page can watch.
 
     Streamed rather than captured at the end because these take minutes — a pip
@@ -650,7 +651,7 @@ def _run_job(job_id: str, steps: list) -> None:
         try:
             proc = subprocess.Popen(step, stdout=subprocess.PIPE,
                                     stderr=subprocess.STDOUT, text=True,
-                                    bufsize=1, cwd=str(ROOT))
+                                    bufsize=1, cwd=str(cwd or ROOT))
             for line in proc.stdout:
                 _emit(job_id, line.rstrip())
             rc = proc.wait()

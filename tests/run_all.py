@@ -61,6 +61,7 @@ SUITES = [
     ("control panel: .env writing", "test_gui_env.py"),
     ("control panel: server", "test_gui_server.py"),
     ("control panel: first-run setup", "test_gui_setup.py"),
+    ("control panel: self-update", "test_gui_updates.py"),
 ]
 
 failed = []
