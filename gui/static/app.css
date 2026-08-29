@@ -259,3 +259,11 @@ body.filtering .section-head .count { display: none; }
 }
 .step-actions:empty { display: none; }
 .log.short { height: 220px; }
+
+/* ---- credential help on the setup page ---- */
+.creds { display: grid; gap: 12px; margin: 10px 0 4px; }
+.cred { display: grid; grid-template-columns: 190px 1fr; gap: 12px; font-size: 13.5px; }
+@media (max-width: 620px) { .cred { grid-template-columns: 1fr; gap: 4px; } }
+.cred code { font-weight: 600; color: var(--ink); }
+.cred a { color: var(--accent); }
+.cred .help { margin-top: 4px; }

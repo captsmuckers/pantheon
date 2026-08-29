@@ -43,6 +43,40 @@ ROOT = Path(__file__).resolve().parent.parent
 # The four settings config.py refuses to start without.
 REQUIRED = ("DISCORD_TOKEN", "ALLOWED_CHANNEL_ID", "PLEX_URL", "PLEX_TOKEN")
 
+# Where each required credential comes from, in the order someone would go and
+# get them. The wizard can install software; it cannot log in as you.
+CREDENTIAL_HELP = {
+    "DISCORD_TOKEN": {
+        "name": "DISCORD_TOKEN",
+        "where": "Discord Developer Portal → your app → Bot → Reset Token",
+        "url": "https://discord.com/developers/applications",
+        "note": "While you are there, turn on MESSAGE CONTENT INTENT under "
+                "Privileged Gateway Intents. Without it the bot connects and "
+                "then ignores every message, with no error at all.",
+    },
+    "ALLOWED_CHANNEL_ID": {
+        "name": "ALLOWED_CHANNEL_ID",
+        "where": "Discord → Settings → Advanced → Developer Mode, then "
+                 "right-click the channel → Copy Channel ID",
+        "url": "",
+        "note": "The one text channel it listens in.",
+    },
+    "PLEX_URL": {
+        "name": "PLEX_URL",
+        "where": "Your Plex server's address, e.g. http://192.168.1.10:32400",
+        "url": "",
+        "note": "This machine must reach it directly — mpv plays the original "
+                "file and there is no transcode fallback.",
+    },
+    "PLEX_TOKEN": {
+        "name": "PLEX_TOKEN",
+        "where": "Plex Web → any item → ⋯ → Get Info → View XML, then take "
+                 "X-Plex-Token from the address bar",
+        "url": "https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/",
+        "note": "",
+    },
+}
+
 BLACKHOLE = {
     "2ch": "/Library/Audio/Plug-Ins/HAL/BlackHole2ch.driver",
     "16ch": "/Library/Audio/Plug-Ins/HAL/BlackHole16ch.driver",
@@ -180,14 +214,19 @@ def _check_env() -> dict:
     values = _env_values()
     blank = [k for k in REQUIRED if not values.get(k)]
     mode = oct(path.stat().st_mode & 0o777)
-    return {"key": "env", "title": "Configuration file",
-            "why": "Where your settings and tokens live.",
+    return {"key": "env", "title": "Credentials",
+            "why": "The four things the bot cannot start without. Each has to "
+                   "be fetched from somewhere; none of it can be automated.",
             "state": "ok" if not blank else "todo",
             "detail": (f".env present, mode {mode}" if not blank
-                       else f"still blank: {', '.join(blank)}"),
+                       else f"{len(blank)} still needed"),
             "fix": None,
-            "manual": "" if not blank else "Fill these in on the Settings page.",
-            "settings": blank}
+            "manual": "",
+            "settings": blank,
+            # Where each one actually comes from. Naming the missing key and
+            # stopping there is the difference between a checklist and a help
+            # page, and this is the step people get stuck on.
+            "credentials": [CREDENTIAL_HELP[k] for k in blank]}
 
 
 def _check_ollama() -> dict:

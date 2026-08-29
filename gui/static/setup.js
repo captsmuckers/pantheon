@@ -25,8 +25,17 @@ function stepCard(s) {
     <p class="step-detail">${escapeHtml(s.detail)}</p>
     ${s.state !== 'ok' && s.manual
       ? `<pre class="cmd">${escapeHtml(s.manual)}</pre>` : ''}
-    ${s.settings && s.settings.length
-      ? `<p><a href="/settings#Discord">Fill these in on the Settings page →</a></p>` : ''}
+    ${s.credentials && s.credentials.length ? `<div class="creds">${
+      s.credentials.map(c => `<div class="cred">
+        <code>${escapeHtml(c.name)}</code>
+        <div>
+          <div>${escapeHtml(c.where)}${c.url
+            ? ` — <a href="${escapeHtml(c.url)}" target="_blank" rel="noreferrer noopener">open</a>` : ''}</div>
+          ${c.note ? `<p class="help">${escapeHtml(c.note)}</p>` : ''}
+        </div>
+      </div>`).join('')}
+      <p><a href="/settings#Discord">Enter them on the Settings page →</a></p>
+    </div>` : ''}
     <div class="step-actions">
       ${canFix ? `<button type="button" class="primary do-fix"
            data-action="${escapeHtml(s.fix)}">Do this for me</button>` : ''}
