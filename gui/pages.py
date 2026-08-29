@@ -18,6 +18,13 @@ NAV = (("/", "Status"), ("/settings", "Settings"),
        ("/logs", "Logs"), ("/security", "Security"), ("/setup", "Setup"))
 
 
+# The project is Pantheon; the bot it runs is called whatever its operator
+# named it. The panel used to say "Athena" in both places, which is wrong twice
+# over on anyone else's install: it is not the project's name, and it is not
+# necessarily their bot's either.
+PROJECT = "Pantheon"
+
+
 def _shell(title: str, here: str, body: str, script: str = "") -> str:
     nav = "".join(
         f'<a href="{href}" class="{"on" if href == here else ""}">{html.escape(label)}</a>'
@@ -26,10 +33,10 @@ def _shell(title: str, here: str, body: str, script: str = "") -> str:
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html.escape(title)} — Athena</title>
+<title>{html.escape(title)} — {html.escape(PROJECT)}</title>
 <link rel="stylesheet" href="/static/app.css">
 </head><body>
-<header><h1><span class="mark">◆</span> Athena</h1><nav>{nav}</nav></header>
+<header><h1><span class="mark">◆</span> {html.escape(PROJECT)}</h1><nav>{nav}</nav></header>
 <main>{body}</main>
 <div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>

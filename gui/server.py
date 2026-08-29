@@ -18,7 +18,7 @@ field on it, so "only I can reach it" has to survive more than good intentions:
   request really does come from your machine. Every request must carry a Host
   this server recognises, or it is refused before routing.
 
-  CUSTOM HEADER ON WRITES.  Every mutating request must carry X-Athena-CSRF.
+  CUSTOM HEADER ON WRITES.  Every mutating request must carry X-Pantheon-CSRF.
   A cross-origin form post cannot set a header, and a cross-origin fetch that
   tries is stopped by the preflight this server never approves.
 
@@ -225,7 +225,7 @@ class Handler(BaseHTTPRequestHandler):
         return _valid_session(self._cookies().get("athena_session", ""))
 
     def _csrf_ok(self) -> bool:
-        return bool(self.headers.get("X-Athena-CSRF"))
+        return bool(self.headers.get("X-Pantheon-CSRF"))
 
     # ----------------------------------------------------------------- routing
 

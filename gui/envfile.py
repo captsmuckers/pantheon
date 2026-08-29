@@ -162,3 +162,18 @@ def _atomic_write(p: Path, text: str) -> None:
         except OSError:
             pass
         raise
+
+
+def bot_name(root=None) -> str:
+    """What the operator calls their bot, for the panel's own labels.
+
+    Read straight from .env rather than from config.py, because the panel
+    deliberately runs without the bot's virtualenv and config imports
+    python-dotenv. Duplicating one default is the price of that independence.
+    """
+    import os
+    base = Path(root) if root else Path(__file__).resolve().parent.parent
+    try:
+        return read(base / ".env").get("BOT_NAME", "").strip() or "Athena"
+    except OSError:
+        return "Athena"

@@ -163,7 +163,7 @@ def test_csrf(p):
     code, _, _ = request(p.port, "/api/settings", "POST", {"values": {}})
     check("POST without the header is refused", code == 403, str(code))
     code, _, _ = request(p.port, "/api/settings", "POST", {"values": {}},
-                         {"X-Athena-CSRF": "1"})
+                         {"X-Pantheon-CSRF": "1"})
     check("POST with the header is accepted", code == 200, str(code))
 
 
@@ -188,7 +188,7 @@ def test_traversal(p):
 
 def test_saving(p):
     print("\nsaving settings is all-or-nothing, and leaves the rest of .env alone:")
-    hdr = {"X-Athena-CSRF": "1"}
+    hdr = {"X-Pantheon-CSRF": "1"}
     before = p.env()
 
     code, text, _ = request(p.port, "/api/settings", "POST",
@@ -231,7 +231,7 @@ def test_saving(p):
 
 def test_remote_access_needs_a_password(p):
     print("\nremote access cannot be enabled without a password:")
-    hdr = {"X-Athena-CSRF": "1"}
+    hdr = {"X-Pantheon-CSRF": "1"}
     code, text, _ = request(p.port, "/api/security", "POST",
                             {"remote_access": True}, hdr)
     check("refused with no password set", code == 400, str(code))
@@ -261,7 +261,7 @@ def test_language_install_is_a_fixed_menu(p):
     reaching it from a request can change WHAT gets installed.
     """
     print("\nthe language installer cannot be pointed at arbitrary packages:")
-    hdr = {"X-Athena-CSRF": "1"}
+    hdr = {"X-Pantheon-CSRF": "1"}
     for evil in ("a", "", "requests", "misaki[ja]", "../../evil",
                  "j; rm -rf /", "-e /tmp/x", "j z"):
         code, text, _ = request(p.port, "/api/tts/install-language", "POST",
@@ -287,7 +287,7 @@ def test_preview_needs_the_speech_service(p):
     it IS running, a preview is real audio.
     """
     print("\npreviewing a voice:")
-    hdr = {"X-Athena-CSRF": "1"}
+    hdr = {"X-Pantheon-CSRF": "1"}
     code, data, headers = request(p.port, "/api/tts/preview", "POST",
                                   {"voice": "bf_emma", "lang": "auto"}, hdr,
                                   raw=True)
@@ -355,7 +355,7 @@ def test_a_refused_post_does_not_break_the_connection(p):
     for label, headers in (
             ("no CSRF header", {"Content-Type": "application/json"}),
             ("foreign Host", {"Content-Type": "application/json",
-                              "X-Athena-CSRF": "1", "Host": "evil.example"})):
+                              "X-Pantheon-CSRF": "1", "Host": "evil.example"})):
         c = http.client.HTTPConnection("127.0.0.1", p.port, timeout=20)
         try:
             c.request("POST", "/api/security",
@@ -393,7 +393,7 @@ def test_setting_a_password_keeps_you_signed_in(p):
     try:
         c.request("POST", "/api/security",
                   json.dumps({"password": "another-long-password"}).encode(),
-                  {"Content-Type": "application/json", "X-Athena-CSRF": "1"})
+                  {"Content-Type": "application/json", "X-Pantheon-CSRF": "1"})
         r = c.getresponse()
         r.read()
         cookie = r.getheader("Set-Cookie") or ""
@@ -404,7 +404,7 @@ def test_setting_a_password_keeps_you_signed_in(p):
         session = cookie.split(";")[0]
         c.request("POST", "/api/security",
                   json.dumps({"remote_access": True}).encode(),
-                  {"Content-Type": "application/json", "X-Athena-CSRF": "1",
+                  {"Content-Type": "application/json", "X-Pantheon-CSRF": "1",
                    "Cookie": session})
         r2 = c.getresponse()
         body = json.loads(r2.read().decode() or "{}")

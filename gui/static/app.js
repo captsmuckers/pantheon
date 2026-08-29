@@ -11,7 +11,7 @@ function api(path) {
 function post(path, body) {
   return fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Athena-CSRF': '1' },
+    headers: { 'Content-Type': 'application/json', 'X-Pantheon-CSRF': '1' },
     body: JSON.stringify(body || {})
   }).then(async r => {
     const data = await r.json().catch(() => ({}));

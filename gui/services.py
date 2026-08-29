@@ -72,8 +72,16 @@ class Service:
     stop_script: str
 
 
+def _service_title() -> str:
+    from gui import envfile
+    return envfile.bot_name(ROOT)
+
+
+# The launchd labels stay com.athena.* whatever the bot is called: they are
+# identifiers, and renaming one would orphan an installed agent rather than
+# rename it. Only the title a person reads follows BOT_NAME.
 SERVICES = {
-    "bot": Service("bot", "com.athena.bot", "Athena",
+    "bot": Service("bot", "com.athena.bot", _service_title(),
                    r"python.*bot\.py", "start-athena.sh", "stop-athena.sh"),
     "tts": Service("tts", "com.athena.tts", "Speech",
                    r"python.*tts_server\.py", "start-tts.sh", "stop-tts.sh"),
@@ -236,7 +244,8 @@ def status() -> dict:
         ld = _launchd(svc.label)
         supervised = ld["loaded"] and ld["ours"]
         out[key] = {
-            "title": svc.title,
+            # Re-resolved per call, so a rename shows up without a restart.
+            "title": _service_title() if key == "bot" else svc.title,
             "running": bool(pids),
             "pids": pids,
             "foreign": foreign,

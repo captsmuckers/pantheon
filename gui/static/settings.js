@@ -174,7 +174,7 @@ function recompute() {
     const restarts = new Set();
     for (const name of dirty) {
       const f = FIELDS.find(x => x.name === name);
-      restarts.add(f && f.restart === 'tts' ? 'Speech' : 'Athena');
+      restarts.add(f && f.restart === 'tts' ? 'Speech' : BOT_NAME);
     }
     const where = new Set();
     for (const name of dirty) {
@@ -315,6 +315,7 @@ function currentVoiceAndLang() {
    server rather than hardcoded here: the answer depends on what is installed
    in its virtualenv, and a copy kept in this file would be wrong the moment
    somebody pressed Install. */
+let BOT_NAME = 'the bot';
 let LANGS = {};
 let INSTALL_NOTES = {};
 
@@ -381,7 +382,7 @@ document.addEventListener('click', e => {
     note.className = 'try-note';
     fetch('/api/tts/preview', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Athena-CSRF': '1' },
+      headers: { 'Content-Type': 'application/json', 'X-Pantheon-CSRF': '1' },
       body: JSON.stringify({ voice, lang })
     }).then(async r => {
       if (r.ok) {
@@ -479,7 +480,11 @@ document.addEventListener('click', e => {
 });
 
 function load() {
-  return api('/api/settings')
+  /* The bot's own name, so the save bar says "Hermes" on an install that
+     renamed it rather than always "Athena". */
+  return api('/api/status').then(d => {
+    BOT_NAME = (d.services && d.services.bot && d.services.bot.title) || 'the bot';
+  }).catch(() => {}).then(() => api('/api/settings'))
     .then(d => { render(d); recompute(); })
     .then(loadLanguages);
 }

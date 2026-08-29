@@ -91,6 +91,14 @@ def _s(*args, **kwargs) -> Setting:
 
 SETTINGS: tuple[Setting, ...] = (
     # -- Discord ------------------------------------------------------
+    _s("BOT_NAME", "str", default="Athena", section="Discord", restart="bot",
+       help="What she is called. Sets the mpv window title, the device Plex "
+            "sees, the Firefox profile and the spoken wake word, all at once. "
+            "Renaming is not free: the wake word was chosen by measurement — "
+            "\"Athena\" was heard 26 times in 28 against 6 in 9 for \"Jarvis\" "
+            "and 0 in 4 for \"Lilith\", because Discord's voice gate clips the "
+            "opening consonant and names starting on an open vowel survive it. "
+            "A name beginning with a hard consonant will be missed often."),
     _s("DISCORD_TOKEN", "secret", required=True, section="Discord",
        help="Bot token from the Discord Developer Portal. The bot also needs "
             "the Message Content Intent enabled there, under Bot > Privileged "
@@ -136,7 +144,7 @@ SETTINGS: tuple[Setting, ...] = (
     _s("IDLE_IMAGE", "path", section="Player",
        help="A still shown between things, so a shared screen is never a frozen "
             "frame. Blank means mpv shows its own default."),
-    _s("MPV_WINDOW_TITLE", "str", default="Athena", section="Player",
+    _s("MPV_WINDOW_TITLE", "str", section="Player",
        advanced=True,
        help="What the player window is called, and how the bot finds it again."),
 
@@ -307,7 +315,7 @@ SETTINGS: tuple[Setting, ...] = (
             "is open."),
     _s("BROWSER_PATH", "path", section="YouTube", advanced=True,
        help="Blank finds Firefox in the usual places."),
-    _s("BROWSER_PROFILE", "str", default="Athena", section="YouTube",
+    _s("BROWSER_PROFILE", "str", section="YouTube",
        advanced=True,
        help="A dedicated Firefox profile, so the bot's YouTube login is its own "
             "and not whoever's is signed in."),

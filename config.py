@@ -50,6 +50,17 @@ def _float(name: str, default: float) -> float:
         return default
 
 
+# --- What she is called ---
+#
+# One name, feeding everything that displays or matches on it: the mpv window
+# title, the device Plex sees, the Firefox profile, and the spoken wake word.
+# Those were four separate settings that each happened to default to "Athena",
+# so renaming meant finding all four and knowing they were related.
+#
+# Defined here, above everything that reads it, because Python executes this
+# file top to bottom and a default cannot reference a name defined later.
+BOT_NAME = os.getenv("BOT_NAME", "").strip() or "Athena"
+
 # --- Discord ---
 DISCORD_TOKEN = _req("DISCORD_TOKEN")
 ALLOWED_CHANNEL_ID = _int("ALLOWED_CHANNEL_ID")
@@ -226,7 +237,7 @@ MUSIC_FOCUS_SPOTIFY = _bool("MUSIC_FOCUS_SPOTIFY", True)
 # Fill the screen with Spotify so viewers can read the queue and lyrics panel.
 MUSIC_MAXIMIZE_SPOTIFY = _bool("MUSIC_MAXIMIZE_SPOTIFY", True)
 # Window title mpv is launched with — used to find it again.
-MPV_WINDOW_TITLE = os.getenv("MPV_WINDOW_TITLE", "Athena").strip() or "Athena"
+MPV_WINDOW_TITLE = os.getenv("MPV_WINDOW_TITLE", "").strip() or BOT_NAME
 # The process name to find Spotify's window by. macOS drops the .exe; macctl
 # strips a trailing .exe anyway, so an .env carried over from Windows still
 # works rather than silently matching nothing.
@@ -338,7 +349,7 @@ BROWSER_PATH = os.getenv("BROWSER_PATH", "").strip() or None
 # A separate Firefox profile, so the bot's YouTube login isn't whoever's
 # personal browsing profile happens to be signed in. Create it once with
 # `firefox.exe -P` and sign into YouTube inside it.
-BROWSER_PROFILE = os.getenv("BROWSER_PROFILE", "Athena").strip()
+BROWSER_PROFILE = os.getenv("BROWSER_PROFILE", "").strip() or BOT_NAME
 # -kiosk: no toolbar, no tabs, no chrome — the video fills the screen the
 # same way mpv does. There's no in-window way out of it; Alt+F4 closes it.
 BROWSER_KIOSK = _bool("BROWSER_KIOSK", True)
@@ -442,7 +453,19 @@ def _wordlist(name: str, default: str) -> str:
     return default if raw is None else raw.strip()
 
 
-VOICE_WAKE_WORDS = _wordlist("VOICE_WAKE_WORDS", "athena athina atena athene")
+# The spellings below are what the transcriber actually produces for "Athena",
+# collected from live use — not variations someone imagined. They are useless
+# for any other name, so a renamed bot gets its own name as the only default
+# and will want its own list built the same way: turn VOICE_TUNING_ENABLED on,
+# talk to it for an evening, and read Logs -> Heard for what came back.
+#
+# Renaming is not free. The wake word was chosen by measurement (see voice.py):
+# "Athena" scored 26/28 where "Jarvis" managed 6/9 and "Lilith" 0/4, because
+# Discord's voice gate eats the opening consonant and names starting on an open
+# vowel survive that. A name beginning with a plosive will be missed often.
+_WAKE_DEFAULT = ("athena athina atena athene"
+                 if BOT_NAME.lower() == "athena" else BOT_NAME.lower())
+VOICE_WAKE_WORDS = _wordlist("VOICE_WAKE_WORDS", _WAKE_DEFAULT)
 # Accepted but not required. A prefix was mandatory under the old one-syllable
 # name, which needed the extra structure to avoid false wakes. "Athena" carries
 # enough on its own, and demanding "hey" in front reintroduces the clipped-attack
@@ -632,7 +655,7 @@ NOWPLAYING_CHANNEL_ID = _int("NOWPLAYING_CHANNEL_ID") or ALLOWED_CHANNEL_ID
 
 # How the bot identifies itself to Plex. A stable identifier means the server
 # sees one consistent device rather than a new anonymous one each restart.
-PLEX_DEVICE_NAME = os.getenv("PLEX_DEVICE_NAME", "Athena").strip() or "Athena"
+PLEX_DEVICE_NAME = os.getenv("PLEX_DEVICE_NAME", "").strip() or BOT_NAME
 # The "plexbot-" seed below is deliberately NOT renamed to match the rebrand.
 # It is the input to a uuid5, so changing it changes the derived client id, and
 # Plex would register a second device alongside the existing one. The name above

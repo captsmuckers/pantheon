@@ -54,7 +54,7 @@ function paint(d) {
           <code>what's playing?</code> in your Discord channel. A reply means
           it is working end to end.</p>
        <p class="help">If nothing comes back, check
-          <a href="/logs">Logs → Athena</a> for <code>Connected to Discord</code>.
+          <a href=\"/logs\">the bot's log</a> for <code>Connected to Discord</code>.
           Connecting but never replying is almost always the Message Content
           Intent being off.</p>`
     : `<p><b>${d.remaining} thing${d.remaining === 1 ? '' : 's'} left</b> before
