@@ -158,6 +158,39 @@ def test_a_failed_write_leaves_the_original():
     check("no temporary file left behind", not leftovers, str(leftovers))
 
 
+def test_password_hashing_works_without_scrypt():
+    """The panel's whole point is running on the Python macOS already ships.
+
+    That interpreter is built against an OpenSSL without scrypt, so
+    hashlib.scrypt does not exist there at all — setting a first password
+    raised AttributeError and the page returned a bare 500. Which algorithm was
+    used is now stored with the hash, so it verifies either way.
+    """
+    print("\npasswords can be set on an interpreter without scrypt:")
+    import hashlib
+    from gui import prefs
+
+    p = prefs.set_password({}, "a-long-enough-password")
+    check("an algorithm is recorded", p["password"].get("alg") in ("scrypt", "pbkdf2"),
+          str(p["password"].get("alg")))
+    check("the right one for this interpreter",
+          p["password"]["alg"] == ("scrypt" if hasattr(hashlib, "scrypt") else "pbkdf2"))
+    check("it verifies", prefs.check_password(p, "a-long-enough-password"))
+    check("a wrong password does not", not prefs.check_password(p, "nope"))
+    check("the password itself is not stored",
+          "a-long-enough-password" not in str(p))
+
+    # A hash written before the algorithm was recorded must still verify.
+    legacy = prefs.set_password({}, "legacy-password")
+    alg = legacy["password"].pop("alg")
+    check("a hash with no recorded algorithm still works",
+          prefs.check_password(legacy, "legacy-password") if alg == "scrypt" else True,
+          f"was {alg}")
+
+    check("clearing it removes it and turns remote access off",
+          prefs.set_password({"remote_access": True}, "")["password"] is None)
+
+
 def main():
     test_reads_what_dotenv_reads()
     test_edits_preserve_the_file()
@@ -167,6 +200,7 @@ def main():
     test_permissions()
     test_write_reports_only_real_changes()
     test_a_failed_write_leaves_the_original()
+    test_password_hashing_works_without_scrypt()
     print(f"\n{sum(PASS)}/{len(PASS)} checks passed")
     return 0 if all(PASS) else 1
 

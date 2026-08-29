@@ -303,6 +303,81 @@ def test_preview_needs_the_speech_service(p):
               "speech service" in body.get("error", "").lower(), str(body)[:90])
 
 
+def test_a_refused_post_does_not_break_the_connection(p):
+    """A POST refused before its body is read desynchronises keep-alive.
+
+    HTTP/1.1 reuses the connection. A POST rejected for a missing CSRF header,
+    a wrong host, or no session leaves its body in the socket, and the next
+    request is parsed starting from those bytes:
+
+        Bad request syntax ('{"remote_access": true}GET /api/status HTTP/1.1')
+
+    which surfaces as a 400 or, when the leftovers do not parse as a method at
+    all, a bare 501 page with nothing in the log. Reported from the settings
+    page as "I saved a password and ticking remote access gives a 501".
+    """
+    print("\na refused POST leaves the connection usable:")
+    import http.client
+    for label, headers in (
+            ("no CSRF header", {"Content-Type": "application/json"}),
+            ("foreign Host", {"Content-Type": "application/json",
+                              "X-Athena-CSRF": "1", "Host": "evil.example"})):
+        c = http.client.HTTPConnection("127.0.0.1", p.port, timeout=20)
+        try:
+            c.request("POST", "/api/security",
+                      json.dumps({"remote_access": True}).encode(), headers)
+            first = c.getresponse()
+            first.read()
+            c.request("GET", "/api/setup/status",
+                      headers={"Accept": "application/json"})
+            second = c.getresponse()
+            body = second.read()
+            ok = second.status < 500 and b"Bad request syntax" not in body
+            check(f"after {label}", ok, f"{second.status} {body[:70]}")
+        except Exception as exc:
+            check(f"after {label}", False, f"{type(exc).__name__}: {exc}")
+        finally:
+            c.close()
+
+
+def test_setting_a_password_keeps_you_signed_in(p):
+    """Turning auth on must not sign out the person turning it on.
+
+    The request that sets a password arrives without a session, because there
+    was no auth a moment ago. Without handing one back, the very next click
+    401s — so "set a password, then tick remote access" failed on the second
+    step every time.
+    """
+    print("\nsetting a password signs you in rather than out:")
+    import http.client
+    c = http.client.HTTPConnection("127.0.0.1", p.port, timeout=30)
+    try:
+        c.request("POST", "/api/security",
+                  json.dumps({"password": "another-long-password"}).encode(),
+                  {"Content-Type": "application/json", "X-Athena-CSRF": "1"})
+        r = c.getresponse()
+        r.read()
+        cookie = r.getheader("Set-Cookie") or ""
+        check("a session cookie comes back", "athena_session=" in cookie, cookie[:50])
+        check("it is HttpOnly and SameSite=Strict",
+              "HttpOnly" in cookie and "SameSite=Strict" in cookie, cookie[:80])
+
+        session = cookie.split(";")[0]
+        c.request("POST", "/api/security",
+                  json.dumps({"remote_access": True}).encode(),
+                  {"Content-Type": "application/json", "X-Athena-CSRF": "1",
+                   "Cookie": session})
+        r2 = c.getresponse()
+        body = json.loads(r2.read().decode() or "{}")
+        check("remote access can then be enabled", r2.status == 200,
+              f"{r2.status} {body.get('error', '')}")
+        check("and it really did bind wider",
+              body.get("state", {}).get("bind") == "0.0.0.0",
+              str(body.get("state")))
+    finally:
+        c.close()
+
+
 def test_prefs_file_permissions(p):
     print("\nthe file holding the password hash is not world-readable:")
     prefs = Path(p.dir) / ".athena-gui.json"
@@ -328,7 +403,9 @@ def main():
         test_preview_needs_the_speech_service(p)
         # Sets a password, after which everything needs a session — so it and
         # the prefs check it produces run last, on purpose.
+        test_a_refused_post_does_not_break_the_connection(p)
         test_remote_access_needs_a_password(p)
+        test_setting_a_password_keeps_you_signed_in(p)
         test_prefs_file_permissions(p)
     finally:
         p.close()

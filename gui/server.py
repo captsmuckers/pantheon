@@ -136,17 +136,45 @@ class Handler(BaseHTTPRequestHandler):
         return (self.path.startswith("/api/")
                 or "application/json" in (self.headers.get("Accept") or ""))
 
-    def _body(self) -> dict:
+    def _read_body(self) -> None:
+        """Consume the request body, ALWAYS, before anything can refuse it.
+
+        HTTP/1.1 keep-alive means the connection is reused. A POST that is
+        refused — wrong host, missing CSRF header, not signed in, unknown path
+        — without its body being read leaves those bytes in the socket, and the
+        next request on that connection is parsed starting from them:
+
+            Bad request syntax ('{"remote_access": true}GET /api/status ...')
+
+        which surfaces as a 400 or, when the leftovers do not parse as a
+        method at all, a bare 501 error page with nothing in the log. Reading
+        the body up front rather than inside each handler makes it impossible
+        for a new early return to reintroduce this.
+        """
+        self._raw_body = b""
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
-            return {}
-        if length <= 0 or length > 1_000_000:
-            return {}
-        raw = self.rfile.read(length)
+            length = 0
+        if length <= 0:
+            return
+        # Still drained when oversized, just not kept: leaving it unread would
+        # desynchronise the connection exactly as before.
+        remaining = length
+        chunks = []
+        while remaining > 0:
+            chunk = self.rfile.read(min(remaining, 65536))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            if length <= 1_000_000:
+                chunks.append(chunk)
+        self._raw_body = b"".join(chunks)
+
+    def _body(self) -> dict:
         try:
-            return json.loads(raw.decode("utf-8"))
-        except ValueError:
+            return json.loads(self._raw_body.decode("utf-8"))
+        except (ValueError, AttributeError):
             return {}
 
     def _cookies(self) -> dict:
@@ -209,6 +237,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route(self, method: str):
         try:
+            # Before any gate can refuse the request. See _read_body.
+            self._read_body()
             if not self._host_ok():
                 self._fail(421, "This server does not answer to that hostname. "
                                 "Reach it as http://127.0.0.1 instead.")
@@ -300,7 +330,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/settings":
             self._json(*_save_settings(body))
         elif path == "/api/security":
-            self._json(*self._save_security(body))
+            code, payload, extra = self._save_security(body)
+            self._json(code, payload, extra)
         elif path == "/api/tts/preview":
             self._preview(body)
         elif path == "/api/tts/install-language":
@@ -376,25 +407,43 @@ class Handler(BaseHTTPRequestHandler):
                          "offset": offset, "reset": reset, "name": path.name})
 
     def _save_security(self, body: dict):
+        """Returns (code, payload, extra headers).
+
+        The headers matter: setting a password turns auth on, and the request
+        that turned it on came in without a session. Without handing one back,
+        the user is signed out by their own action — the very next click 401s,
+        which is how "set a password, tick remote access" produced an error
+        page rather than a checkbox.
+        """
         p = dict(self.server.prefs)
-        message = []
+        message, extra = [], {}
 
         if "password" in body:
             new = str(body.get("password") or "")
             if new and len(new) < 8:
-                return 400, {"ok": False, "error": "Use at least 8 characters."}
+                return 400, {"ok": False, "error": "Use at least 8 characters."}, {}
             if prefs.has_password(p) and not prefs.check_password(
                     p, str(body.get("current") or "")):
-                return 403, {"ok": False, "error": "Current password is wrong."}
+                return 403, {"ok": False, "error": "Current password is wrong."}, {}
             p = prefs.set_password(p, new)
-            message.append("Password set." if new else
-                           "Password removed, and remote access turned off with it.")
+            if new:
+                # Keep whoever just set it signed in, rather than locking them
+                # out of the page they are standing on.
+                token = _new_session()
+                extra["Set-Cookie"] = (
+                    f"athena_session={token}; Path=/; HttpOnly; "
+                    f"SameSite=Strict; Max-Age={SESSION_LIFETIME}")
+                message.append("Password set — you are signed in on this browser.")
+            else:
+                message.append("Password removed, and remote access turned off "
+                               "with it.")
 
         if "remote_access" in body:
             want = bool(body["remote_access"])
             if want and not prefs.has_password(p):
                 return 400, {"ok": False,
-                             "error": "Set a password before enabling remote access."}
+                             "error": "Set a password before enabling remote "
+                                      "access."}, {}
             if want != p.get("remote_access"):
                 p["remote_access"] = want
                 message.append("Remote access " + ("enabled" if want else "disabled")
@@ -403,7 +452,7 @@ class Handler(BaseHTTPRequestHandler):
         prefs.save(p)
         self.server.prefs = p
         return 200, {"ok": True, "message": " ".join(message) or "Nothing changed.",
-                     "state": _security_state(p)}
+                     "state": _security_state(p)}, extra
 
 
 def _is_ip_literal(host: str) -> bool:

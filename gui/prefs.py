@@ -43,6 +43,27 @@ PREFS = ROOT / ".athena-gui.json"
 _N, _R, _P = 1 << 15, 8, 1
 _MAXMEM = 128 * _N * _R * 2
 
+# scrypt is not always there. The stock /usr/bin/python3 on macOS is built
+# against an OpenSSL without it, and hashlib.scrypt simply does not exist —
+# which matters because running on that interpreter, before anything is
+# installed, is the whole point of this panel. Setting a first password raised
+# AttributeError and the page returned a bare 500.
+#
+# PBKDF2-HMAC-SHA256 is the fallback: always present, not memory-hard, so the
+# iteration count carries the cost instead. Which algorithm was used is stored
+# with the hash, so a password set on one interpreter still verifies on the
+# other and neither has to guess.
+_HAS_SCRYPT = hasattr(hashlib, "scrypt")
+_PBKDF2_ROUNDS = 600_000
+
+
+def _derive(password: str, salt: bytes, alg: str) -> bytes:
+    if alg == "scrypt":
+        return hashlib.scrypt(password.encode("utf-8"), salt=salt,
+                              n=_N, r=_R, p=_P, maxmem=_MAXMEM)
+    return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt,
+                               _PBKDF2_ROUNDS)
+
 DEFAULTS = {
     "port": 8086,             # 8085 is the TTS server; do not collide with it
     "remote_access": False,   # bind beyond loopback. Requires a password.
@@ -90,9 +111,9 @@ def set_password(prefs: dict, password: str) -> dict:
         prefs["remote_access"] = False
         return prefs
     salt = secrets.token_bytes(16)
-    digest = hashlib.scrypt(password.encode("utf-8"), salt=salt,
-                            n=_N, r=_R, p=_P, maxmem=_MAXMEM)
-    prefs["password"] = {"salt": salt.hex(), "hash": digest.hex()}
+    alg = "scrypt" if _HAS_SCRYPT else "pbkdf2"
+    prefs["password"] = {"salt": salt.hex(), "alg": alg,
+                         "hash": _derive(password, salt, alg).hex()}
     return prefs
 
 
@@ -105,8 +126,14 @@ def check_password(prefs: dict, password: str) -> bool:
         want = bytes.fromhex(stored["hash"])
     except (KeyError, ValueError):
         return False
-    got = hashlib.scrypt(password.encode("utf-8"), salt=salt,
-                         n=_N, r=_R, p=_P, maxmem=_MAXMEM)
+    # Default to scrypt for a hash written before the algorithm was recorded.
+    alg = stored.get("alg", "scrypt")
+    if alg == "scrypt" and not _HAS_SCRYPT:
+        return False
+    try:
+        got = _derive(password, salt, alg)
+    except (ValueError, AttributeError):
+        return False
     return hmac.compare_digest(got, want)
 
 
