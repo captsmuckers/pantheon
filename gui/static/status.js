@@ -114,3 +114,106 @@ document.getElementById('services').addEventListener('click', e => {
 
 refresh();
 setInterval(refresh, 5000);
+
+/* ---- updates ------------------------------------------------------------
+   Deliberately manual. Checking is a click and applying is another, because
+   this updates code that is currently running somebody's film, on a machine
+   they may not be sitting at. */
+
+function updateBody(d) {
+  if (!d.ok) {
+    return `<p class="sub">${escapeHtml(d.message)}</p>` +
+      (d.hint ? `<pre class="cmd">${escapeHtml(d.hint)}</pre>` : '');
+  }
+  const at = `<p class="meta">On <b>${escapeHtml(d.branch)}</b> at
+      <code>${escapeHtml(d.current)}</code> — ${escapeHtml(d.current_subject)}
+      <span class="dim">(${escapeHtml(d.current_date)})</span></p>`;
+
+  if (d.blocked) {
+    return at + `<p class="note">${escapeHtml(d.blocked)}</p>` +
+      (d.dirty && d.dirty.length
+        ? `<pre class="cmd">${d.dirty.map(escapeHtml).join('\n')}</pre>` : '') +
+      `<div class="actions"><button id="update-check">Check again</button></div>`;
+  }
+  if (!d.behind) {
+    return at + `<p class="sub">Up to date${d.checked ? ' as of just now' : ''}.</p>
+      <div class="actions"><button id="update-check">Check for updates</button></div>`;
+  }
+
+  const list = (d.commits || []).map(c =>
+    `<div class="cmt"><code>${escapeHtml(c.hash)}</code>
+       <span class="dim">${escapeHtml(c.date)}</span>
+       <span>${escapeHtml(c.subject)}</span></div>`).join('');
+  const deps = (d.dependencies || []).length
+    ? `<p class="note">This update changes ${
+        d.dependencies.map(x => escapeHtml(x.what)).join(' and ')
+      }, which will be reinstalled as part of it.</p>` : '';
+
+  return at + `<p><b>${d.behind} update${d.behind === 1 ? '' : 's'} available.</b></p>
+    <div class="commits">${list}</div>${deps}
+    <div class="actions">
+      <button class="primary" id="update-apply">Update now</button>
+      <button id="update-check">Check again</button>
+    </div>`;
+}
+
+function paintUpdate(d) {
+  const box = document.getElementById('update-body');
+  if (box) box.innerHTML = updateBody(d);
+}
+
+function loadUpdate(check) {
+  const box = document.getElementById('update-body');
+  if (check && box) box.innerHTML = '<p class="loading">Contacting the repository…</p>';
+  const req = check
+    ? post('/api/update/check', {}).then(r => ({ ...r.data, checked: true }))
+    : api('/api/update/status');
+  return req.then(paintUpdate).catch(() => {});
+}
+
+document.addEventListener('click', e => {
+  if (e.target.id === 'update-check') { loadUpdate(true); return; }
+  if (e.target.id !== 'update-apply') return;
+
+  e.target.disabled = true;
+  const out = document.getElementById('update-output');
+  out.hidden = false;
+  out.textContent = '';
+  post('/api/update/apply', {}).then(r => {
+    if (!r.ok) { toast(r.data.message || 'Could not update.', 'bad'); loadUpdate(false); return; }
+    const restarts = r.data.restarts || [];
+    let since = 0;
+    const poll = setInterval(() => {
+      api(`/api/setup/job?id=${encodeURIComponent(r.data.job)}&since=${since}`)
+        .then(j => {
+          if (!j.ok) { clearInterval(poll); return; }
+          if (j.lines.length) {
+            out.textContent += j.lines.join('\n') + '\n';
+            out.scrollTop = out.scrollHeight;
+          }
+          since = j.next;
+          if (!j.done) return;
+          clearInterval(poll);
+          if (j.rc === 0) {
+            /* The panel is never restarted for you: it is the process serving
+               this page, and pulling it out from under itself is
+               indistinguishable from a crash. */
+            const say = restarts.filter(x => x !== 'panel');
+            toast('Updated.' + (say.length
+              ? ` Restart ${say.join(' and ')} to apply.` : ''), 'good');
+            if (restarts.includes('panel')) {
+              out.textContent += '\nThe control panel itself changed. Restart it ' +
+                'from the terminal (Ctrl-C, then scripts/start-gui.sh) to pick ' +
+                'up the new version.\n';
+            }
+          } else {
+            toast('Update failed — see the output.', 'bad');
+          }
+          loadUpdate(false);
+          refresh();
+        }).catch(() => {});
+    }, 1000);
+  }).catch(() => {});
+});
+
+loadUpdate(false);

@@ -50,6 +50,12 @@ def status_page() -> str:
   <p class="loading">Checking…</p>
 </section>
 
+<section class="panel" id="update-panel">
+  <h2>Updates</h2>
+  <div id="update-body"><p class="loading">Checking…</p></div>
+  <pre id="update-output" class="log short" hidden></pre>
+</section>
+
 <section class="panel">
   <h2>What it needs</h2>
   <p class="sub">External things the bot depends on. Each of these has stopped

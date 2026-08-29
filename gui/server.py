@@ -58,6 +58,7 @@ sys.path.insert(0, str(ROOT))
 import schema                                    # noqa: E402
 from gui import envfile, logs, pages, prefs, services  # noqa: E402
 from gui import setup as setup_mod                     # noqa: E402
+from gui import updates as updates_mod                 # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
 ENV_PATH = ROOT / ".env"
@@ -299,6 +300,10 @@ class Handler(BaseHTTPRequestHandler):
             self._html(pages.setup_page())
         elif path == "/api/setup/status":
             self._json(200, setup_mod.probe())
+        elif path == "/api/update/status":
+            # No fetch: this is polled, and a network round trip per poll
+            # would be rude to both the machine and the repository.
+            self._json(200, updates_mod.status())
         elif path == "/api/setup/job":
             try:
                 since = int((query.get("since") or ["0"])[0])
@@ -343,6 +348,11 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/setup/run":
             result = setup_mod.start(str(body.get("action", "")))
             self._json(200 if result["ok"] else 400, result)
+        elif path == "/api/update/check":
+            self._json(200, updates_mod.plan())
+        elif path == "/api/update/apply":
+            result = updates_mod.apply()
+            self._json(200 if result.get("ok") else 400, result)
         elif path == "/api/logout":
             with _LOCK:
                 SESSIONS.pop(self._cookies().get("athena_session", ""), None)

@@ -267,3 +267,10 @@ body.filtering .section-head .count { display: none; }
 .cred code { font-weight: 600; color: var(--ink); }
 .cred a { color: var(--accent); }
 .cred .help { margin-top: 4px; }
+
+/* ---- updates ---- */
+.commits { display: grid; gap: 5px; margin: 8px 0 12px; }
+.cmt { display: flex; gap: 10px; align-items: baseline; font-size: 13px; }
+.cmt code { color: var(--accent); }
+.dim { color: var(--faint); }
+#update-output { margin-top: 12px; }

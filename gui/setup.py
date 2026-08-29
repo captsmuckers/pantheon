@@ -575,6 +575,22 @@ _JOB_LOCK = threading.Lock()
 MAX_LINES = 400
 
 
+def start_steps(title: str, steps: list) -> dict:
+    """Run a prepared list of commands as a background job.
+
+    Exposed so the updater can reuse this rather than growing a second job
+    runner. `steps` is built by the caller from its own fixed table — nothing
+    here makes it safe, and nothing here should be handed a command that came
+    from a request.
+    """
+    job_id = uuid.uuid4().hex
+    with _JOB_LOCK:
+        _JOBS[job_id] = {"action": "steps", "title": title, "lines": [],
+                         "done": False, "rc": None, "started": time.time()}
+    threading.Thread(target=_run_job, args=(job_id, steps), daemon=True).start()
+    return {"ok": True, "job": job_id, "title": title}
+
+
 def start(action: str) -> dict:
     """Begin a whitelisted action in the background. Returns a job id."""
     spec = ACTIONS.get(action)
