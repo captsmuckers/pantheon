@@ -40,6 +40,18 @@ TWO THINGS TO KNOW BEFORE RELYING ON A REMOTE SERVER.
 
   The owner must have Remote Access enabled. Without it, only local addresses
   are advertised and nothing here will be reachable from anywhere else.
+
+HOW THE CONNECTION ACTUALLY WORKS, because it is easy to assume otherwise.
+plex.tv handles sign-in and discovery only. The video itself does NOT travel
+through Plex: a plex.direct address such as
+https://203-0-113-9.<hash>.plex.direct:32400 is a DNS trick — the hostname
+resolves to that literal IP, and Plex holds a wildcard certificate so HTTPS
+works against an address that has no name of its own. Traffic goes straight
+from here to the owner's connection.
+
+The exception is Relay, above, which really is proxied through Plex and really
+is throttled. Anyone already watching a shared library at full quality has a
+direct connection and will be fine.
 """
 
 import sys
@@ -123,20 +135,36 @@ def main() -> int:
         online = "online" if res.presence else "OFFLINE right now"
         print(f"{res.name}  ({owner}, {online})")
 
-        remote = [c for c in res.connections if not c.local]
         local = [c for c in res.connections if c.local]
+        # A relay connection is proxied through Plex's own servers and is
+        # capped — around 1 Mbps, 2 with Plex Pass. It is fine for a phone on
+        # a train and useless here, because this bot plays the original file
+        # and cannot drop quality to fit. Kept separate rather than listed
+        # with the rest: it would connect, and then stutter forever, which is
+        # a far worse failure than not connecting at all.
+        relayed = [c for c in res.connections if getattr(c, "relay", False)]
+        direct = [c for c in res.connections
+                  if not c.local and not getattr(c, "relay", False)]
 
-        if res.owned and local:
-            print("  On the same network as the server, prefer a local address:")
+        if local:
+            print("  On the same network as the server:")
             for c in local:
                 print(f"    PLEX_URL={c.uri}")
-        if remote:
-            print("  From anywhere else:")
-            for c in remote:
+        if direct:
+            print("  From anywhere else (direct to the server):")
+            for c in direct:
                 print(f"    PLEX_URL={c.uri}")
-        elif not local:
-            print("  No usable address advertised. The owner may not have "
-                  "Remote Access enabled.")
+        if not local and not direct:
+            print("  No direct address advertised. The owner may not have "
+                  "Remote Access enabled, or their connection cannot accept "
+                  "inbound traffic.")
+        if relayed:
+            print("  Also offered, but DO NOT USE for this bot:")
+            for c in relayed:
+                print(f"    {c.uri}  (Plex Relay)")
+            print("    Relay is proxied through Plex and capped near 1-2 Mbps.")
+            print("    It would connect and then buffer endlessly, because this")
+            print("    bot plays the original file and cannot reduce quality.")
 
         if res.accessToken:
             print(f"    PLEX_TOKEN={res.accessToken}")

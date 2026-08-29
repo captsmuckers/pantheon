@@ -201,9 +201,23 @@ Two more things to understand:
   own access token to each user who can reach it. Yours is the one the bot
   needs, and it keeps your watched state separate from theirs.
 - **`PLEX_URL` will be an address like
-  `https://192-168-1-10.<hash>.plex.direct:32400`.** That is a real
-  certificate for an address that resolves to their server. The owner must have
+  `https://203-0-113-9.<hash>.plex.direct:32400`.** The owner must have
   **Remote Access** enabled or no such address is advertised.
+
+**plex.tv handles sign-in and discovery only — the video does not go through
+Plex.** That `plex.direct` hostname is a DNS trick: the dashed label decodes to
+the literal IP (`203-0-113-9…` resolves to `203.0.113.9`), and Plex holds a
+wildcard certificate so HTTPS works against an address that has no name of its
+own. The stream goes straight from your machine to the owner's connection, the
+same as any other Plex client.
+
+The exception is **Plex Relay**, which genuinely is proxied through Plex — and
+throttled to roughly 1–2 Mbps. Plex falls back to it when a direct connection
+cannot be made. `find-plex-server.py` lists relay addresses separately and tells
+you not to use them: this bot plays the original file and cannot drop quality
+to fit, so a relay connection would connect and then buffer forever. Anyone
+already watching a shared library at full quality has a direct connection and
+will be fine.
 
 **The bandwidth caveat is the important one.** This bot never transcodes — it
 hands mpv the original file, which is why subtitle changes are instant and
