@@ -169,6 +169,37 @@ the token is the `X-Plex-Token=` value in the address bar.
 
 Paste both into **Settings → Plex**.
 
+#### Using someone else's Plex server
+
+If you watch a friend's library rather than running your own, both settings are
+different and neither is guessable. Run:
+
+```bash
+./scripts/find-plex-server.py
+```
+
+It asks for your **plex.tv account token** (not a server token, and not your
+friend's), then prints a ready-to-paste `PLEX_URL` and `PLEX_TOKEN` for every
+server you can reach — including shared ones.
+
+Two things to understand before relying on it:
+
+- **`PLEX_TOKEN` is not your friend's token.** Each server issues its own
+  access token to each user who can reach it. Yours is the one the bot needs,
+  and it keeps your watched state separate from theirs.
+- **`PLEX_URL` will be an address like
+  `https://192-168-1-10.<hash>.plex.direct:32400`.** That is a real
+  certificate for an address that resolves to their server. The owner must have
+  **Remote Access** enabled or no such address is advertised.
+
+**The bandwidth caveat is the important one.** This bot never transcodes — it
+hands mpv the original file, which is why subtitle changes are instant and
+practically any codec plays. Over the internet that means playback needs as
+much bandwidth as the file's own bitrate, sustained, over the **owner's
+upload**. A 1080p film at 8 Mbps is comfortable; a 4K remux at 60–80 Mbps is
+not, and there is no quality setting to lower it. Ordinary Plex clients
+transcode in that situation; this one cannot.
+
 At this point the setup page should show nothing outstanding. Start the bot
 from the **Status** page and talk to it in the channel.
 
