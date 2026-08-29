@@ -61,57 +61,215 @@ speech.
 
 ---
 
-## Quick start
+## Setup
+
+Roughly **20 minutes**, most of it waiting for downloads. The control panel does
+the software side for you; the parts that need a password, a web login, or a
+macOS dialog are yours, and they are listed here in order.
+
+| | who does it |
+|---|---|
+| Homebrew, Python, mpv, Ollama | **you** — one command each, below |
+| virtualenvs, dependencies, `.env`, model download | the panel |
+| Discord / Plex / Spotify credentials | **you** — three web pages |
+| macOS permission grants | **you** — two dialogs |
+| Audio devices for voice | **you** — needs your password |
+
+---
+
+### 1. Prerequisites
+
+If you do not have [Homebrew](https://brew.sh):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Then:
+
+```bash
+brew install python@3.13 mpv yt-dlp
+```
+
+macOS ships Python 3.9. The control panel runs on it deliberately, but the bot
+needs 3.13. `ffmpeg` arrives with mpv.
+
+**For fuzzy requests and conversation**, install [Ollama](https://ollama.com)
+and leave it running:
+
+```bash
+brew install ollama
+ollama serve
+```
+
+Skip it if you like — the bot still handles anything unambiguous (`play X`,
+`pause`, `back 30s`) and only vague requests are lost.
+
+---
+
+### 2. Start the control panel
 
 ```bash
 git clone https://github.com/captsmuckers/pantheon.git
 cd pantheon
-brew install python@3.13 mpv yt-dlp
-python3.13 -m venv .venv
-.venv/bin/python -m pip install -r requirements.txt
-cp .env.example .env
 scripts/start-gui.sh
 ```
 
-Then open **<http://127.0.0.1:8086>**. It will land you on a setup page that
-checks what is present, does what it can for you — creating the virtualenv,
-copying the config, pulling a model — and gives you the exact command for the
-few things it cannot, like the audio driver that needs your password.
+Open **<http://127.0.0.1:8086>**. It lands on a setup page listing what is
+present and what is not.
 
-In fact only the first two lines above are needed. The control panel requires
-no virtualenv and runs on the Python macOS already ships, so you can clone,
-start it, and let it do the rest:
+Press **"Do this for me"** on each outstanding item. It will create the
+virtualenv, install dependencies, copy the config file, and pull a language
+model, streaming the output as it goes. The model is about 5 GB and the slowest
+part.
+
+Leave it open — the rest of this is done in it.
+
+---
+
+### 3. Discord
+
+You need a bot account, its token, and the ID of the channel it listens in.
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+   and click **New Application**. Name it whatever you like.
+2. Open the **Bot** tab.
+   - Under **Privileged Gateway Intents**, turn on **MESSAGE CONTENT INTENT**.
+     Without this the bot connects and then ignores every message, with no
+     error — it is the single commonest setup mistake.
+   - Click **Reset Token**, then **Copy**. This is `DISCORD_TOKEN`. You cannot
+     view it again later, only reset it.
+3. Open **OAuth2 → URL Generator**.
+   - Scopes: **`bot`** and **`applications.commands`**
+   - Bot permissions: **View Channels**, **Send Messages**, **Read Message
+     History**, **Connect**, **Speak**. Add **Manage Channels** only if you want
+     it to keep a status channel's topic updated.
+   - Copy the generated URL at the bottom, open it, and invite the bot to your
+     server.
+4. Get the channel ID. In Discord: **Settings → Advanced → Developer Mode**, on.
+   Then right-click the channel it should listen in → **Copy Channel ID**. This
+   is `ALLOWED_CHANNEL_ID`.
+
+Paste both into the panel's **Settings → Discord**.
+
+---
+
+### 4. Plex
+
+`PLEX_URL` is your server, for example `http://192.168.1.10:32400`. The machine
+running the bot must be able to reach it directly — there is no transcode
+fallback, mpv plays the original file.
+
+For `PLEX_TOKEN`, follow Plex's own instructions:
+[Finding an authentication token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/).
+The short version: open any item in Plex Web, **⋯ → Get Info → View XML**, and
+the token is the `X-Plex-Token=` value in the address bar.
+
+Paste both into **Settings → Plex**.
+
+At this point the setup page should show nothing outstanding. Start the bot
+from the **Status** page and talk to it in the channel.
+
+---
+
+### 5. macOS permissions
+
+The bot moves mpv and Spotify windows around. Two **separate** grants, in
+**System Settings → Privacy & Security**:
+
+- **Accessibility** — add whatever runs the bot (Terminal, iTerm, or the Python
+  binary itself). Without it every window call fails and the bot reports it
+  cannot find windows that are plainly on screen.
+- **Automation** — for controlling Spotify. Requested the first time the bot
+  tries; if you dismiss that dialog it is never asked again and must be
+  re-enabled by hand.
+
+Both fail *silently*, which is why they are worth granting deliberately. The
+setup page checks Accessibility and will tell you if it is missing.
+
+Screen Recording is a third grant and belongs to Discord, not to the bot.
+
+---
+
+### 6. Spotify (optional)
+
+Only needed for music. **Spotify Premium is required** — the API will not
+control playback on a free account.
+
+1. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+   and click **Create app**.
+2. Set the **Redirect URI** to exactly `http://127.0.0.1:8888/callback`.
+3. Copy the **Client ID** and **Client Secret** into **Settings → Spotify**.
+4. Run `scripts/reauth-spotify.sh` once to authorise. It opens a browser; the
+   token is cached afterwards.
+
+---
+
+### 7. Voice and speech (optional)
+
+Both are off by default. Turn them on in **Settings → Voice** and
+**Settings → Speech**.
+
+**Speech** — the panel can install it for you from the setup page. It is about
+2 GB and needs Python 3.12, because Kokoro declares `Requires-Python <3.13`:
 
 ```bash
-git clone https://github.com/captsmuckers/pantheon.git
-cd pantheon && scripts/start-gui.sh
+brew install python@3.12
 ```
 
-The one thing no wizard can do for you is fetch your credentials. It will tell
-you which are missing and link you to the page to enter them.
+Then press **"Do this for me"** on the speech step.
 
-`.env.example` documents every setting if you would rather edit a file.
+**Voice input** needs the packages (the panel installs those) and two virtual
+audio devices (it cannot — this installs a system driver and needs your
+password):
 
-### Permissions macOS will ask for
+```bash
+brew install --cask blackhole-2ch blackhole-16ch
+```
 
-Two **separate** grants in System Settings → Privacy & Security. Both are asked
-for once and refused silently forever if the prompt is dismissed, so they are
-worth granting deliberately:
+**Restart Discord afterwards** or it will not see the new devices. Then, in
+Discord's **Voice & Video** settings:
 
-- **Accessibility** — for whatever runs the bot (Terminal, iTerm, or the Python
-  binary). Without it every window call fails and the bot reports "Couldn't
-  find the Spotify window" for windows that are plainly there.
-- **Automation** — for controlling Spotify. This is the one that gets missed,
-  because the first prompt looks like it covered everything.
+| direction | device | Discord setting |
+|---|---|---|
+| she hears the room | **BlackHole 2ch** | Output Device |
+| the room hears her | **BlackHole 16ch** | Input Device (mic) |
 
-Screen Recording is a third grant, and it belongs to Discord rather than to the
-bot.
+Routing output to BlackHole means *you* stop hearing it. Fix that with a
+**Multi-Output Device** in **Audio MIDI Setup** (Applications → Utilities):
+click **+** at the bottom left, tick both BlackHole 2ch and your speakers, and
+point Discord at that instead.
 
-### On the Discord side
+Two things that produce silence rather than an error:
 
-The bot needs the **Message Content Intent** enabled (Developer Portal → Bot →
-Privileged Gateway Intents), or it will connect and then ignore every message.
-Add `Manage Channels` if you want it to keep a status channel's topic updated.
+- The streaming account must be **muted, never deafened**. A deafened client
+  receives no audio at all, so there is nothing to capture.
+- Discord will not move a live voice connection to a newly selected device.
+  **Leave and rejoin** the channel after changing it.
+
+`scripts/check-audio.py` verifies both directions.
+
+---
+
+### 8. Start on login (optional)
+
+Press **"Do this for me"** on the last setup step, or:
+
+```bash
+scripts/install-launchagents.sh              # install and start
+scripts/install-launchagents.sh --uninstall  # stop and remove
+```
+
+This writes the two LaunchAgents with the right absolute paths for your
+checkout and loads them. Both services then start when you log in and restart
+if they crash.
+
+After that, use the control panel's Start and Stop rather than the scripts:
+launchd's `KeepAlive` will undo anything else within ten seconds.
+
+It must run in your logged-in GUI session — window control needs a real login
+session, so a LaunchAgent is fine and a LaunchDaemon is not. Closing the lid
+with no external display stops everything.
 
 ---
 
@@ -169,66 +327,12 @@ mpv it owns — the other order makes the watchdog relaunch mpv instantly — an
 it sends SIGINT rather than SIGKILL, so mpv shuts down cleanly instead of
 leaving a fullscreen window behind.
 
-To start on login, install the LaunchAgents with `scripts/launchd-*.sh`. After
-that, use the control panel's Start and Stop rather than the scripts: launchd's
-`KeepAlive` will undo anything else within ten seconds.
-
 Slash commands exist as a fallback: `/play /queue /status /pause /skip /stop
 /restart /help`.
 
 ---
 
-## Voice and speech
-
-Both are optional and off by default. Turn them on in the panel.
-
-**Speech** uses [Kokoro](https://huggingface.co/hexgrad/Kokoro-82M), an 82M
-model that runs on the GPU and produces a line in about a second. It needs its
-own virtualenv, because it pins a different Python and torch than the bot:
-
-```bash
-brew install python@3.12
-/opt/homebrew/bin/python3.12 -m venv tts/.venv
-tts/.venv/bin/python -m pip install -r tts/requirements.txt
-scripts/start-tts.sh
-```
-
-3.12, not 3.13 — Kokoro declares `Requires-Python <3.13`.
-
-**Voice input** uses faster-whisper on the CPU, and needs
-`requirements-dev.txt` as well as two virtual audio devices.
-
-### The audio cables
-
-macOS has no built-in loopback, so both directions need a virtual device — two
-of them, not one, because a single shared device would feed her own voice
-straight back into her ears:
-
-```bash
-brew install --cask blackhole-2ch blackhole-16ch
-```
-
-That installs a system audio driver, so it asks for your password, and Discord
-needs restarting afterwards to see the new devices. Then, in Discord:
-
-| direction | device | Discord setting |
-|---|---|---|
-| she hears the room | **BlackHole 2ch** | Output Device |
-| the room hears her | **BlackHole 16ch** | Input Device (mic) |
-
-Routing output to BlackHole means *you* stop hearing it. Fix that with a
-Multi-Output Device in **Audio MIDI Setup** (Applications → Utilities)
-containing both BlackHole 2ch and your speakers, and point Discord at that.
-
-Two things that are easy to miss and produce silence rather than an error: the
-streaming account must be **muted, never deafened** — a deafened client
-receives no audio at all, so there is nothing to capture — and Discord will not
-move a live voice connection to a newly selected device, so leave and rejoin
-the channel after changing it.
-
-`scripts/check-audio.py` verifies both directions.
-
-### What it writes down
+## What voice input writes down
 
 With voice on, everything the microphone picks up is transcribed — including
 conversation not addressed to the bot. The bot's own log records only the shape
@@ -236,8 +340,10 @@ of an utterance ("3.9s: NO-WAKE (13 words)"); the words go to a separate file,
 so turning that off is one switch rather than an audit of every log line.
 
 `VOICE_TUNING_ENABLED` is that switch, and it is **on** by default because it
-is how you tune the wake word against a real room. It rotates at 5MB. If other
-people are in the room, tell them, or turn it off.
+is how you tune the wake word against a real room. It rotates at 5 MB, and the
+panel shows it under **Logs → Heard**.
+
+If other people are in the room, tell them, or turn it off.
 
 ---
 

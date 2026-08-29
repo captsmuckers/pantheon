@@ -34,9 +34,13 @@ def test_actions_are_a_fixed_menu():
         refused = not result.get("ok") and "No such setup action" in result.get("message", "")
         check(f"{evil!r} refused", refused, str(result.get("message", ""))[:60])
 
-    check("the menu is exactly the known six",
-          set(setup.ACTIONS) == {"brew_tools", "make_venv", "make_env",
-                                 "pull_model", "make_tts_venv", "install_voice_deps"},
+    # Spelled out rather than counted, so that adding an action is a
+    # deliberate edit here as well as there. This is the list of commands a
+    # web request can cause to run; it should be uncomfortable to grow.
+    check("the menu is exactly what is expected",
+          set(setup.ACTIONS) == {"brew_python", "brew_tools", "make_venv",
+                                 "make_env", "pull_model", "make_tts_venv",
+                                 "install_voice_deps", "install_launchagents"},
           str(sorted(setup.ACTIONS)))
 
     # Every argv must be built here, from literals and paths this module

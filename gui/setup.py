@@ -98,6 +98,45 @@ def _env_values() -> dict:
 # `fix` names an entry in ACTIONS when the panel can do it itself; `manual`
 # carries the command or click-path when it cannot.
 
+def _check_python() -> dict:
+    """A Python new enough to build the bot's virtualenv with.
+
+    macOS ships 3.9 and the project is built and tested on 3.13. The control
+    panel itself deliberately runs on 3.9 so it can be open before any of this
+    is true — which is exactly why this has to be checked rather than assumed.
+    """
+    found = _pythons()
+    have = _bot_python()
+    return {"key": "python", "title": "Python 3.13",
+            "why": "What the bot runs on. macOS ships 3.9, which is enough for "
+                   "this control panel and not for the bot.",
+            "state": "ok" if have else "todo",
+            "detail": (f"{have}" if have else
+                       f"only {sys.version.split()[0]} found"),
+            "fix": "brew_python" if not have and shutil.which("brew") else None,
+            "manual": "brew install python@3.13" if not have else "",
+            "found": found}
+
+
+def _check_brew() -> dict:
+    """Homebrew, which most of the other fixes are.
+
+    Not a dependency of the bot — a dependency of being able to install the
+    dependencies. Reported separately because "brew: command not found" three
+    steps later is a worse experience than being told up front.
+    """
+    path = shutil.which("brew")
+    return {"key": "brew", "title": "Homebrew",
+            "why": "How mpv, Python and Ollama get installed. The panel cannot "
+                   "install Homebrew itself — that script wants your password.",
+            "state": "ok" if path else "todo",
+            "detail": path or "not installed",
+            "fix": None,
+            "manual": "" if path else
+                      '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com'
+                      '/Homebrew/install/HEAD/install.sh)"'}
+
+
 def _check_tools() -> dict:
     missing = [t for t in ("mpv", "yt-dlp") if not shutil.which(t)]
     found = {t: shutil.which(t) for t in ("mpv", "yt-dlp")}
@@ -244,8 +283,41 @@ def _check_voice() -> dict:
                        ".venv/bin/python -m pip install -r requirements-dev.txt")}
 
 
-CHECKS = (_check_tools, _check_bot_venv, _check_env, _check_ollama,
-          _check_permissions, _check_speech, _check_voice)
+def _check_launchagents() -> dict:
+    """Whether the bot starts at login and restarts if it crashes.
+
+    Optional: plenty of people would rather start it by hand. Reported anyway,
+    because "why did it not come back after a reboot" is otherwise a mystery.
+    """
+    agents = Path.home() / "Library" / "LaunchAgents"
+    installed = []
+    for label in ("com.athena.bot", "com.athena.tts"):
+        plist = agents / f"{label}.plist"
+        if not plist.exists():
+            continue
+        try:
+            import plistlib
+            with open(plist, "rb") as fh:
+                data = plistlib.load(fh)
+            program = " ".join(data.get("ProgramArguments") or [])
+            if str(ROOT) in program:
+                installed.append(label)
+        except Exception:
+            pass
+    both = len(installed) == 2
+    return {"key": "launchd", "title": "Start at login (optional)",
+            "why": "Installs LaunchAgents so both services start when you log "
+                   "in and restart if they crash.",
+            "state": "ok" if both else "optional",
+            "detail": ("both agents installed for this checkout" if both else
+                       f"installed: {', '.join(installed) or 'neither'}"),
+            "fix": "install_launchagents",
+            "manual": "scripts/install-launchagents.sh"}
+
+
+CHECKS = (_check_brew, _check_python, _check_tools, _check_bot_venv,
+          _check_env, _check_ollama, _check_permissions, _check_speech,
+          _check_voice, _check_launchagents)
 
 
 def probe() -> dict:
@@ -285,7 +357,16 @@ def _pythons() -> dict:
 
 
 def _bot_python() -> str:
-    return _pythons().get("3.13") or sys.executable
+    """The interpreter to build the bot's virtualenv with, or "" if there is none.
+
+    Returns empty rather than falling back to sys.executable. That fallback was
+    the bug: on a Mac with nothing installed, sys.executable is the stock
+    /usr/bin/python3 (3.9), so the wizard would cheerfully build a 3.9
+    virtualenv, report success, and hand over an install that cannot run the
+    bot. A missing prerequisite has to look missing.
+    """
+    found = _pythons()
+    return found.get("3.13") or found.get("3.12") or ""
 
 
 ACTIONS = {
@@ -293,6 +374,11 @@ ACTIONS = {
         "title": "Install mpv and yt-dlp",
         "steps": lambda: [["brew", "install", "mpv", "yt-dlp"]],
         "note": "A few minutes. ffmpeg comes along with mpv.",
+    },
+    "brew_python": {
+        "title": "Install Python 3.13",
+        "steps": lambda: [["brew", "install", "python@3.13"]],
+        "note": "A few minutes.",
     },
     "make_venv": {
         "title": "Create the bot environment",
@@ -325,6 +411,13 @@ ACTIONS = {
         ],
         "note": "Several minutes, and about 2 GB — it pulls PyTorch. Needs "
                 "Python 3.12: Kokoro declares Requires-Python <3.13.",
+    },
+    "install_launchagents": {
+        "title": "Install the start-at-login agents",
+        "steps": lambda: [["/bin/bash",
+                           str(ROOT / "scripts" / "install-launchagents.sh")]],
+        "note": "Both services restart while this runs, so give it a few "
+                "seconds. Remove them later with --uninstall.",
     },
     "install_voice_deps": {
         "title": "Install voice input packages",
@@ -369,7 +462,14 @@ def start(action: str) -> dict:
     # important action permanently unrunnable on exactly the fresh machine it
     # exists for.
     first = steps[0][0]
-    if not (shutil.which(first) or Path(first).exists()):
+    # The empty check is load-bearing: Path("") is PosixPath("."), which exists,
+    # so an unresolved interpreter sailed through this guard and the wizard
+    # started a job to run "" as a command.
+    if not first:
+        return {"ok": False,
+                "message": "Cannot run this yet — no suitable Python was found. "
+                           "Install one first (brew install python@3.13)."}
+    if not (shutil.which(first) or Path(first).is_file()):
         return {"ok": False,
                 "message": f"Cannot run this yet — {first} is not installed."}
 
