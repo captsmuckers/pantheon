@@ -80,6 +80,69 @@ def _executable() -> str | None:
     return None
 
 
+def _profile_dir() -> str | None:
+    """Where BROWSER_PROFILE actually lives, per profiles.ini.
+
+    Read from the ini rather than guessed by globbing for "*.<name>": the
+    directory prefix is random, and a profile someone made by hand need not
+    follow that convention at all.
+    """
+    ini = os.path.expanduser(
+        "~/Library/Application Support/Firefox/profiles.ini"
+        if sys.platform == "darwin"
+        else "~/AppData/Roaming/Mozilla/Firefox/profiles.ini")
+    if not os.path.exists(ini):
+        return None
+    want, path, in_profile = f"Name={config.BROWSER_PROFILE}", None, False
+    try:
+        for line in open(ini, encoding="utf-8", errors="replace"):
+            line = line.strip()
+            if line.startswith("["):
+                in_profile = False
+            elif line == want:
+                in_profile = True
+            elif in_profile and line.startswith("Path="):
+                path = line[5:]
+                break
+    except OSError:
+        return None
+    if not path:
+        return None
+    if os.path.isabs(path):
+        return path
+    return os.path.expanduser(
+        os.path.join("~/Library/Application Support/Firefox", path)
+        if sys.platform == "darwin"
+        else os.path.join("~/AppData/Roaming/Mozilla/Firefox", path))
+
+
+def _clear_stale_lock() -> None:
+    """Remove a lock left by a Firefox that did not exit cleanly.
+
+    Firefox that is killed - which is exactly how this module's windows get
+    closed - leaves .parentlock behind. The next launch then shows a "Close
+    Firefox" dialog INSTEAD of the page, and the window-diffing below happily
+    returns that dialog as the window to control: open_video reports success
+    and hands back a handle to an error box.
+
+    Only done when no Firefox is running at all, so this can never yank the
+    lock out from under a live instance.
+    """
+    if wm.find_windows(_PROCESS):
+        return
+    profile = _profile_dir()
+    if not profile:
+        return
+    for name in (".parentlock", "lock", "parent.lock"):
+        target = os.path.join(profile, name)
+        try:
+            if os.path.exists(target) or os.path.islink(target):
+                os.unlink(target)
+                log.info("Cleared a stale Firefox lock: %s", target)
+        except OSError as exc:
+            log.debug("Could not clear %s: %s", target, exc)
+
+
 def open_video(url: str) -> tuple[str, int | None]:
     """Open url in the dedicated profile, maximized. Blocking; call via a thread.
 
@@ -105,6 +168,7 @@ def open_video(url: str) -> tuple[str, int | None]:
     # a window opened, fully usable, owned by a pid that was never ours.
     # Diffing the set of Firefox windows before and after the launch instead
     # of chasing a specific pid sidesteps that entirely.
+    _clear_stale_lock()
     before = set(wm.find_windows(_PROCESS))
 
     args = [exe, "-no-remote", "-new-instance", "-P", config.BROWSER_PROFILE]
@@ -128,8 +192,16 @@ def open_video(url: str) -> tuple[str, int | None]:
     for _ in range(_WINDOW_WAIT_ATTEMPTS):
         time.sleep(_WINDOW_WAIT_INTERVAL)
         new = [h for h in wm.find_windows(_PROCESS) if h not in before]
-        if new:
-            hwnd = new[0]
+        # A window titled "Close Firefox" is the profile-in-use dialog, not the
+        # page. Taking it would report success and leave the user looking at an
+        # error box the bot believes is a video.
+        real = [h for h in new if "close firefox" not in h.lower()]
+        if new and not real:
+            log.warning("Firefox opened its profile-in-use dialog instead of the page")
+            return ("Firefox is already running with that profile — close it "
+                    "and try again."), None
+        if real:
+            hwnd = real[0]
             break
     if not hwnd:
         log.warning("Firefox launch requested but no new window showed up in time")

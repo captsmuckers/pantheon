@@ -265,13 +265,21 @@ report that they cannot be played.
 
 ```bash
 brew install --cask firefox
-/Applications/Firefox.app/Contents/MacOS/firefox -P
+scripts/setup-firefox-profile.sh --open
 ```
 
-Create a profile named **Athena** (or set `BROWSER_PROFILE`), sign in to
-YouTube inside it, and play one video by hand — a fresh profile has no
-interaction history with youtube.com and Firefox silently blocks autoplay
-without one.
+The script creates the profile and configures it; the window it opens is for
+**you to sign in to YouTube**, which is the one part nothing can automate.
+
+The configuration matters more than it looks. A fresh Firefox profile blocks
+autoplay (it has no interaction history with youtube.com), and shows a welcome
+tour and a data notice *on top of the page* — in kiosk mode there is no toolbar
+to dismiss them from. The video would open and appear to do nothing. The script
+writes a `user.js` that turns all of that off.
+
+The setup page reports this as done only when the profile exists, is
+configured, **and** is signed in — installed-but-not-signed-in is the state
+that looks finished and is not.
 
 There is no playback control once a video opens this way: pause, seek and stop
 do not reach it.

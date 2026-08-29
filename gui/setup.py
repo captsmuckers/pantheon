@@ -302,17 +302,69 @@ def _check_firefox() -> dict:
                   os.path.expanduser("~/Applications/Firefox.app/Contents/MacOS/firefox")]
     found = shutil.which("firefox") or next(
         (c for c in candidates if Path(c).exists()), None)
+    if not found:
+        return {"key": "firefox", "title": "Age-restricted YouTube (optional)",
+                "why": "Age-gated YouTube links open in a signed-in Firefox, "
+                       "because yt-dlp cannot get past the gate. Everything "
+                       "else on YouTube works without this.",
+                "state": "optional",
+                "detail": "Firefox not installed — age-gated links will report "
+                          "that they cannot be played",
+                "fix": None,
+                "manual": "brew install --cask firefox"}
+
+    # Installed is not the same as ready. The profile has to exist, be
+    # configured (a fresh one blocks autoplay and shows onboarding over the
+    # video), and be signed in to YouTube — which is the only part nobody can
+    # automate, and the part most likely to be forgotten.
+    import configparser
+    prof_dir, prefs, signed_in = None, False, False
+    ini = Path.home() / "Library" / "Application Support" / "Firefox" / "profiles.ini"
+    if ini.exists():
+        try:
+            cp = configparser.ConfigParser()
+            cp.read(ini)
+            wanted = os.environ.get("BROWSER_PROFILE") or \
+                _env_values().get("BROWSER_PROFILE") or "Athena"
+            for section in cp.sections():
+                if cp[section].get("Name") == wanted:
+                    path = cp[section].get("Path", "")
+                    prof_dir = (Path(path) if os.path.isabs(path)
+                                else ini.parent / path)
+                    break
+        except Exception:
+            prof_dir = None
+    if prof_dir and prof_dir.exists():
+        prefs = (prof_dir / "user.js").exists()
+        # A signed-in profile has cookies for google/youtube. Checked by size
+        # rather than by reading them: the file existing proves nothing, and
+        # reading somebody's cookie jar to render a checkmark would be rude.
+        cookies = prof_dir / "cookies.sqlite"
+        signed_in = cookies.exists() and cookies.stat().st_size > 200_000
+
+    ready = bool(prof_dir and prefs and signed_in)
+    if ready:
+        detail = f"{found} — profile configured and signed in"
+    elif prof_dir:
+        parts = []
+        if not prefs:
+            parts.append("no user.js (autoplay will be blocked)")
+        if not signed_in:
+            parts.append("not signed in to YouTube")
+        detail = f"profile exists but {', and '.join(parts)}"
+    else:
+        detail = f"{found} — no '{'Athena'}' profile yet"
+
     return {"key": "firefox", "title": "Age-restricted YouTube (optional)",
             "why": "Age-gated YouTube links open in a signed-in Firefox, "
                    "because yt-dlp cannot get past the gate. Everything else "
                    "on YouTube works without this.",
-            "state": "ok" if found else "optional",
-            "detail": found or "Firefox not installed — age-gated links will "
-                               "report that they cannot be played",
-            "fix": None,
-            "manual": "brew install --cask firefox\n"
-                      "# then create the profile and sign in to YouTube in it:\n"
-                      "/Applications/Firefox.app/Contents/MacOS/firefox -P"}
+            "state": "ok" if ready else "optional",
+            "detail": detail,
+            "fix": "setup_firefox" if not ready else None,
+            "manual": "" if ready else
+                      "scripts/setup-firefox-profile.sh --open\n"
+                      "# then sign in to YouTube in the window it opens"}
 
 
 def _check_launchagents() -> dict:
@@ -451,6 +503,15 @@ ACTIONS = {
         ],
         "note": "Several minutes, and about 2 GB — it pulls PyTorch. Needs "
                 "Python 3.12: Kokoro declares Requires-Python <3.13.",
+    },
+    "setup_firefox": {
+        "title": "Prepare the Firefox profile",
+        "steps": lambda: [["/bin/bash",
+                           str(ROOT / "scripts" / "setup-firefox-profile.sh"),
+                           "--open"]],
+        "note": "Creates the profile and configures it, then opens it at "
+                "YouTube. Sign in there — that part is yours, and it is the "
+                "only step that cannot be automated.",
     },
     "install_launchagents": {
         "title": "Install the start-at-login agents",
