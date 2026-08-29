@@ -350,7 +350,12 @@ def test_setting_a_password_keeps_you_signed_in(p):
     """
     print("\nsetting a password signs you in rather than out:")
     import http.client
-    c = http.client.HTTPConnection("127.0.0.1", p.port, timeout=30)
+    # Its own panel: this has to run against one with NO password yet, and the
+    # remote-access test above deliberately leaves one set. Borrowing that
+    # state made this fail with "current password is wrong", which looks like
+    # the bug it is testing for and is not.
+    fresh = Panel()
+    c = http.client.HTTPConnection("127.0.0.1", fresh.port, timeout=30)
     try:
         c.request("POST", "/api/security",
                   json.dumps({"password": "another-long-password"}).encode(),
@@ -376,6 +381,7 @@ def test_setting_a_password_keeps_you_signed_in(p):
               str(body.get("state")))
     finally:
         c.close()
+        fresh.close()
 
 
 def test_prefs_file_permissions(p):
