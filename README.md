@@ -178,15 +178,28 @@ different and neither is guessable. Run:
 ./scripts/find-plex-server.py
 ```
 
-It asks for your **plex.tv account token** (not a server token, and not your
-friend's), then prints a ready-to-paste `PLEX_URL` and `PLEX_TOKEN` for every
-server you can reach — including shared ones.
+It gives you a four-character code to enter at
+[plex.tv/link](https://plex.tv/link) while signed in **as yourself**, then
+prints a ready-to-paste `PLEX_URL` and `PLEX_TOKEN` for every server you can
+reach — including shared ones. No password is typed into it and nothing is
+stored.
 
-Two things to understand before relying on it:
+The link code exists because **there are two kinds of Plex token** and the one
+that is easy to find is the wrong one for this job:
 
-- **`PLEX_TOKEN` is not your friend's token.** Each server issues its own
-  access token to each user who can reach it. Yours is the one the bot needs,
-  and it keeps your watched state separate from theirs.
+| | what it is | how to get it |
+|---|---|---|
+| **Server token** | authenticates you to one server — this is what goes in `PLEX_TOKEN` | the usual "Get Info → View XML" trick |
+| **Account token** | authenticates you to plex.tv, the only thing that knows how to reach a server from outside its LAN | a link code |
+
+The usual advice hands you the token the bot wants but not the one needed to
+*find* the server. Hence the code.
+
+Two more things to understand:
+
+- **You use your own Plex account, not the owner's.** Each server issues its
+  own access token to each user who can reach it. Yours is the one the bot
+  needs, and it keeps your watched state separate from theirs.
 - **`PLEX_URL` will be an address like
   `https://192-168-1-10.<hash>.plex.direct:32400`.** That is a real
   certificate for an address that resolves to their server. The owner must have

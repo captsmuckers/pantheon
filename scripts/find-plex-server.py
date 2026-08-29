@@ -3,22 +3,31 @@
 
     ./scripts/find-plex-server.py
 
-Asks for your plex.tv token, then prints the two settings for every server you
-can reach — servers you own and servers shared with you alike.
+Signs you in to plex.tv with a four-character code, then prints the two
+settings for every server you can reach — servers you own and servers shared
+with you alike.
 
 WHY THIS EXISTS. The setup instructions assume your own Plex on your own LAN,
 where PLEX_URL is just http://<box>:32400. Someone watching a friend's library
 has neither: no local address, and their own account rather than the owner's.
-Both of the things they need are discoverable, and neither is guessable:
+Both of the things they need are discoverable, and neither is guessable.
 
-  PLEX_URL    A remote server advertises an HTTPS address that looks like
-              https://192-168-1-10.<hash>.plex.direct:32400 — a real
-              certificate for an address that resolves to the server. Nobody
-              is going to work that out by hand.
+THERE ARE TWO KINDS OF PLEX TOKEN, and confusing them is the whole reason this
+script exists rather than a paragraph telling you where to click:
 
-  PLEX_TOKEN  NOT the owner's token, and not the plex.tv token you paste in
-              here either. Each server issues its own access token to each
-              user who can reach it, and that is what the bot needs.
+  A SERVER token authenticates you to one particular server. It is what the
+  bot needs in PLEX_TOKEN, and it is what you get if you follow the usual
+  "open any item -> Get Info -> View XML and copy X-Plex-Token" advice.
+
+  An ACCOUNT token authenticates you to plex.tv itself, which is the only
+  thing that knows which servers exist and how to reach them from outside a
+  LAN. A server token returns 401 there.
+
+So the usual advice hands you the token the bot wants but not the one needed to
+FIND the server in the first place. Rather than explain that, this uses plex.tv
+link codes: you get a four-character code, you type it into a page while signed
+in as yourself, and plex.tv hands back an account token. No password is typed
+here, and nothing is stored.
 
 TWO THINGS TO KNOW BEFORE RELYING ON A REMOTE SERVER.
 
@@ -33,7 +42,6 @@ TWO THINGS TO KNOW BEFORE RELYING ON A REMOTE SERVER.
   are advertised and nothing here will be reachable from anywhere else.
 """
 
-import getpass
 import sys
 from pathlib import Path
 
@@ -46,43 +54,61 @@ if _VENV.exists() and Path(sys.executable).resolve() != _VENV.resolve():
     os.execv(str(_VENV), [str(_VENV), str(Path(__file__).resolve()), *sys.argv[1:]])
 
 try:
-    from plexapi.myplex import MyPlexAccount
+    from plexapi.myplex import MyPlexAccount, MyPlexPinLogin
 except ImportError:
     print("plexapi is not installed. Create the environment first:\n"
           "  .venv/bin/python -m pip install -r requirements.txt", file=sys.stderr)
     raise SystemExit(1)
 
 
-HELP = """\
-This needs your plex.tv account token — the one tied to YOUR account, not to
-any particular server.
+LINK_URL = "https://plex.tv/link"
 
-To find it:
-  1. Sign in at https://app.plex.tv in a browser
-  2. Open any item -> the ... menu -> Get Info -> View XML
-  3. In the address bar of the tab that opens, copy the value of X-Plex-Token
 
-It is not stored anywhere by this script; it is used once, now, to ask plex.tv
-which servers you can reach.
-"""
+def _account_via_pin():
+    """Sign in with a plex.tv link code. Returns an account, or None.
+
+    Chosen over asking for a token because the token people can readily find is
+    the wrong one — "Get Info -> View XML" yields a SERVER token, which plex.tv
+    rejects with a 401 that explains nothing. A link code cannot be the wrong
+    kind, and no password is typed into this script.
+    """
+    try:
+        pin = MyPlexPinLogin()
+    except Exception as exc:
+        print(f"Could not reach plex.tv: {exc}", file=sys.stderr)
+        return None
+
+    print("To sign in, open this page while signed in to Plex as yourself:\n")
+    print(f"    {LINK_URL}\n")
+    print(f"and enter this code:      {pin.pin}\n")
+    print("Waiting... (Ctrl-C to give up)", flush=True)
+
+    try:
+        pin.run(timeout=180)
+        ok = pin.waitForLogin()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        return None
+    except Exception as exc:
+        print(f"\nSign-in failed: {exc}", file=sys.stderr)
+        return None
+
+    if not ok or not pin.token:
+        print("\nThe code was not entered in time. Run this again for a new one.",
+              file=sys.stderr)
+        return None
+
+    try:
+        return MyPlexAccount(token=pin.token)
+    except Exception as exc:
+        print(f"\nSigned in, but plex.tv would not describe the account: {exc}",
+              file=sys.stderr)
+        return None
 
 
 def main() -> int:
-    print(HELP)
-    # getpass so it is not echoed into a shared terminal or a screen recording,
-    # and never written to shell history.
-    token = getpass.getpass("plex.tv token (input hidden): ").strip()
-    if not token:
-        print("Nothing entered.", file=sys.stderr)
-        return 1
-
-    try:
-        account = MyPlexAccount(token=token)
-    except Exception as exc:
-        print(f"\nplex.tv rejected that token: {exc}", file=sys.stderr)
-        print("\nA server token will not work here — it authenticates to one "
-              "server, not to your account. Take the token from app.plex.tv "
-              "while signed in as yourself.", file=sys.stderr)
+    account = _account_via_pin()
+    if account is None:
         return 1
 
     print(f"\nSigned in as {account.username}.\n")
