@@ -43,6 +43,7 @@ import mimetypes
 import os
 import secrets as _secrets
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -202,14 +203,16 @@ class Handler(BaseHTTPRequestHandler):
             return True
         # With remote access deliberately enabled, this machine's own names and
         # addresses are legitimate too.
+        #
+        # Note what this does NOT do: resolve the Host header and accept it if
+        # it points here. That is precisely the rebinding attack — the
+        # attacker's domain really does resolve to this machine. Only names
+        # this machine calls itself are accepted, collected once at startup.
         if self.server.prefs.get("remote_access"):
-            names = {socket.gethostname(), socket.gethostname().split(".")[0],
-                     socket.gethostname() + ".local"}
-            try:
-                names |= set(socket.gethostbyname_ex(socket.gethostname())[2])
-            except OSError:
-                pass
-            return host in names or _is_ip_literal(host)
+            extra = {str(h).lower() for h in
+                     (self.server.prefs.get("extra_hosts") or [])}
+            return (host.lower() in _local_names() or host.lower() in extra
+                    or _is_ip_literal(host))
         return False
 
     def _authed(self) -> bool:
@@ -453,6 +456,56 @@ class Handler(BaseHTTPRequestHandler):
         self.server.prefs = p
         return 200, {"ok": True, "message": " ".join(message) or "Nothing changed.",
                      "state": _security_state(p)}, extra
+
+
+_LOCAL_NAMES = None
+
+
+def _local_names() -> set:
+    """Every name this machine answers to, lower-cased. Computed once.
+
+    socket.gethostname() alone is not enough on macOS. It returns the
+    DNS-ish name ("something.localdomain") while Bonjour advertises a
+    SEPARATE LocalHostName ("Something-MacBook-Pro.local") — and the .local
+    name is how anyone actually reaches a Mac on a LAN. Deriving one from the
+    other does not work; they are different strings. Accessing the panel by
+    its Bonjour name was refused with 421 until this was collected properly.
+
+    Extra names can be added in .athena-gui.json as "extra_hosts", for a
+    router-assigned name or a reverse proxy, since no amount of local
+    inspection can discover those.
+    """
+    global _LOCAL_NAMES
+    if _LOCAL_NAMES is not None:
+        return _LOCAL_NAMES
+
+    names = {"localhost"}
+    try:
+        hostname = socket.gethostname()
+        names |= {hostname, hostname.split(".")[0], hostname + ".local"}
+        names.add(socket.getfqdn())
+    except OSError:
+        pass
+
+    if sys.platform == "darwin":
+        for key in ("LocalHostName", "ComputerName", "HostName"):
+            try:
+                out = subprocess.run(["scutil", "--get", key],
+                                     capture_output=True, text=True, timeout=5)
+                value = out.stdout.strip()
+                if value:
+                    names |= {value, value + ".local"}
+            except (OSError, subprocess.SubprocessError):
+                pass
+
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None):
+            names.add(info[4][0])
+    except (OSError, socket.gaierror):
+        pass
+
+    _LOCAL_NAMES = {n.lower().rstrip(".") for n in names if n}
+    return _LOCAL_NAMES
 
 
 def _is_ip_literal(host: str) -> bool:

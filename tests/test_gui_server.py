@@ -303,6 +303,40 @@ def test_preview_needs_the_speech_service(p):
               "speech service" in body.get("error", "").lower(), str(body)[:90])
 
 
+def test_the_machines_own_names_are_accepted(p):
+    """With remote access on, this machine's own names must work.
+
+    socket.gethostname() alone is not enough on macOS: it returns the DNS-ish
+    name ("x.localdomain") while Bonjour advertises a SEPARATE LocalHostName
+    ("X-MacBook-Pro.local") — and the .local name is how anyone actually
+    reaches a Mac on a LAN. Reaching the panel by its Bonjour name was refused
+    with 421 while every other name worked.
+    """
+    print("\nthe host allowlist covers what this machine is really called:")
+    from gui import server as srv
+    names = srv._local_names()
+    check("localhost is in it", "localhost" in names)
+    check("the hostname is in it",
+          socket.gethostname().lower() in names, socket.gethostname())
+
+    if sys.platform == "darwin":
+        import subprocess as sp
+        try:
+            local = sp.run(["scutil", "--get", "LocalHostName"],
+                           capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            local = ""
+        if local:
+            check("the Bonjour .local name is in it",
+                  f"{local.lower()}.local" in names, f"{local}.local")
+
+    # And the whole point of the check still holds.
+    check("an attacker's domain is not",
+          "evil.example" not in names and "attacker.test" not in names)
+    check("names are resolved once and cached, not per request",
+          srv._local_names() is names)
+
+
 def test_a_refused_post_does_not_break_the_connection(p):
     """A POST refused before its body is read desynchronises keep-alive.
 
@@ -409,6 +443,7 @@ def main():
         test_preview_needs_the_speech_service(p)
         # Sets a password, after which everything needs a session — so it and
         # the prefs check it produces run last, on purpose.
+        test_the_machines_own_names_are_accepted(p)
         test_a_refused_post_does_not_break_the_connection(p)
         test_remote_access_needs_a_password(p)
         test_setting_a_password_keeps_you_signed_in(p)
