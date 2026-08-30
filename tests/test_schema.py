@@ -68,8 +68,7 @@ UNLISTED = {
 LAUNCHER_READ = {"TTS_ENGINE", "TTS_VOICE_REF", "TTS_LANG_CODE",
                  "STREAM_AUDIO_ENABLED", "STREAM_AUDIO_DEVICE",
                  "STREAM_AUDIO_MONITOR", "DISCORD_VOICE_CHANNEL",
-                 "DISCORD_KEYBIND_JOIN", "DISCORD_KEYBIND_LEAVE",
-                 "PANEL_HOSTNAME", "PANEL_PORT"}
+                 "DISCORD_KEYBIND_JOIN", "DISCORD_KEYBIND_LEAVE"}
 
 # Python files that read settings. flavor.py reads its own length limit rather
 # than routing it through config, so scanning config.py alone reported a real

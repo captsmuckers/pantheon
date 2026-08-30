@@ -72,10 +72,10 @@ PLIST
 # agent loaded. Polling until the label is gone is the fix; the sleep is not
 # decoration.
 unload() {
-    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.name com.athena.streamaudio; do
+    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.streamaudio; do
         launchctl bootout "gui/$UID_NUM/$label" 2>/dev/null || true
     done
-    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.name com.athena.streamaudio; do
+    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.streamaudio; do
         i=0
         while launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1; do
             sleep 0.5
@@ -91,8 +91,7 @@ unload() {
 if [[ "${1:-}" == "--uninstall" ]]; then
     unload
     rm -f "$AGENTS/com.athena.bot.plist" "$AGENTS/com.athena.tts.plist" \
-          "$AGENTS/com.athena.gui.plist" "$AGENTS/com.athena.name.plist" \
-          "$AGENTS/com.athena.streamaudio.plist"
+          "$AGENTS/com.athena.gui.plist" "$AGENTS/com.athena.streamaudio.plist"
     echo "Removed. Athena will not start at login."
     exit 0
 fi
@@ -110,14 +109,10 @@ plist_for com.athena.bot    launchd-athena.sh athena > "$AGENTS/com.athena.bot.p
 # start everything else, and needing physical access to start the thing that
 # gives you remote access defeats the point of it.
 plist_for com.athena.gui    start-gui.sh      gui    > "$AGENTS/com.athena.gui.plist"
-# Publishes <PANEL_HOSTNAME>.local so the panel has a URL rather than an IP.
-# Supervised because dns-sd holds the registration only while it runs.
-plist_for com.athena.name   publish-name.sh   name   > "$AGENTS/com.athena.name.plist"
 echo "Wrote:"
 echo "  $AGENTS/com.athena.tts.plist"
 echo "  $AGENTS/com.athena.bot.plist"
 echo "  $AGENTS/com.athena.gui.plist"
-echo "  $AGENTS/com.athena.name.plist"
 
 # Stream audio routing, only when it is actually turned on. It is a one-shot
 # at login rather than a supervised service: it makes the device, selects it,
@@ -150,7 +145,7 @@ STREAMPLIST
     echo "  $AGENTS/com.athena.streamaudio.plist"
 fi
 
-LABELS="com.athena.tts com.athena.bot com.athena.gui com.athena.name"
+LABELS="com.athena.tts com.athena.bot com.athena.gui"
 [ -f "$AGENTS/com.athena.streamaudio.plist" ] && LABELS="$LABELS com.athena.streamaudio"
 for label in $LABELS; do
     i=0

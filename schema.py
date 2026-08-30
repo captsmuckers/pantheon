@@ -91,17 +91,6 @@ def _s(*args, **kwargs) -> Setting:
 
 SETTINGS: tuple[Setting, ...] = (
     # -- Discord ------------------------------------------------------
-    _s("PANEL_HOSTNAME", "str", default="pantheon", section="Discord",
-       restart="none", advanced=True,
-       help="The name this machine publishes itself under on the local "
-            "network, so the panel has a URL instead of an IP — reachable as "
-            "<name>.local. Published over Bonjour, which needs no router or "
-            "DNS configuration and never leaves the LAN."),
-    _s("PANEL_PORT", "int", default=8086, lo=1, hi=65535, section="Discord",
-       restart="none", advanced=True,
-       help="The port the panel listens on, used when publishing the name "
-            "above. Changing the panel's actual port is done on the Security "
-            "page."),
     _s("BOT_NAME", "str", default="Athena", section="Discord", restart="bot",
        help="What she is called. Sets the mpv window title, the device Plex "
             "sees, the Firefox profile and the spoken wake word, all at once. "
