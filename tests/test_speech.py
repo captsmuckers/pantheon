@@ -112,10 +112,38 @@ def _check_resample():
     mono = np.linspace(-1, 1, 2400, dtype="float32")
     out = speech.resample(mono, 24000, 48000)
     check("24k -> 48k doubles the length", len(out), 4800)
-    check("endpoints preserved", (round(float(out[0]), 3),
-                                  round(float(out[-1]), 3)), (-1.0, 1.0))
     same = speech.resample(mono, 48000, 48000)
     check("same rate is a passthrough", len(same), 2400)
+
+    # The property that actually matters, and the one linear interpolation
+    # failed. A 24kHz source has nothing above 12kHz, so any energy up there
+    # after upsampling was invented by the resampler. Linear interpolation
+    # left it 27dB below the signal, which is audible as a gritty edge.
+    t = np.arange(24000, dtype="float64") / 24000.0
+    tone = np.sin(2 * np.pi * 3000 * t).astype("float32")   # a clean 3kHz tone
+    up = np.asarray(speech.resample(tone, 24000, 48000), dtype="float64")
+    spec = np.abs(np.fft.rfft(up * np.hanning(len(up))))
+    freqs = np.fft.rfftfreq(len(up), 1 / 48000)
+    wanted = float((spec[(freqs > 20) & (freqs < 12000)] ** 2).sum())
+    images = float((spec[freqs >= 12500] ** 2).sum())
+    db = 10 * np.log10(images / wanted)
+    check("images are pushed below -40dB", db < -40, True)
+    if db >= -40:
+        print(f"         imaging measured at {db:.1f} dB")
+
+    print("\nlevelling cannot clip, whatever it is given")
+    quiet = (np.sin(np.linspace(0, 400, 8000)) * 0.02).astype("float32")
+    loud = (np.sin(np.linspace(0, 400, 8000)) * 0.99).astype("float32")
+    for name, sig in (("a quiet line", quiet), ("an already-hot line", loud)):
+        out = speech.normalize(sig)
+        check(f"{name} stays under full scale",
+              bool(np.abs(out).max() <= 1.0), True)
+    check("a quiet line is brought up",
+          float(np.abs(speech.normalize(quiet)).max()) > float(np.abs(quiet).max()),
+          True)
+    check("silence is left alone",
+          float(np.abs(speech.normalize(np.zeros(1000, dtype="float32"))).max()),
+          0.0)
 
 
 class _FakeStream:

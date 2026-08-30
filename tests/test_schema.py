@@ -162,7 +162,10 @@ def test_secrets_are_marked():
     marked = {s.name for s in schema.secrets()}
     check("the known secrets are marked", should <= marked, str(should - marked))
     for s in schema.SETTINGS:
-        looks_secret = re.search(r"TOKEN|SECRET|PASSWORD|_KEY$", s.name)
+        # TOKEN singular is a credential (DISCORD_TOKEN, PLEX_TOKEN); TOKENS
+        # plural is a count (CHAT_MAX_TOKENS). The negative lookahead keeps the
+        # check strict without renaming a setting whose unit really is tokens.
+        looks_secret = re.search(r"TOKEN(?!S)|SECRET|PASSWORD|_KEY$", s.name)
         if looks_secret and not s.is_secret():
             check(f"{s.name} marked secret", False, "name looks like a credential")
     check("nothing credential-shaped left unmarked", True)

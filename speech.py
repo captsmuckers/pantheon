@@ -133,21 +133,88 @@ def _close_quietly(stream) -> None:
         log.debug("Could not close a failed output stream", exc_info=True)
 
 
+# Half the taps of a windowed-sinc kernel, per polyphase branch. 16 puts the
+# stopband far enough down that the images below are inaudible, and keeps the
+# filter short enough to convolve a minute of speech in a few milliseconds.
+_RESAMPLE_TAPS = 16
+
+
+def _antialias_kernel(factor: int) -> "np.ndarray":
+    """Windowed-sinc low-pass at the lower of the two Nyquist limits."""
+    half = _RESAMPLE_TAPS * factor
+    n = np.arange(-half, half + 1, dtype="float64")
+    cutoff = 0.5 / factor
+    h = 2 * cutoff * np.sinc(2 * cutoff * n) * np.blackman(len(n))
+    return h
+
+
+def normalize(audio):
+    """Bring a line up to a normal speaking level, without ever clipping.
+
+    Kokoro delivers about -23 dBFS RMS against a -18 dBFS broadcast norm, and
+    the quiet end of that is where a voice gate starts eating syllables — which
+    is the shape the choppiness complaint took. Levelling also keeps one line
+    from being noticeably quieter than the next.
+
+    The gain is the smaller of what the RMS target asks for and what the peak
+    ceiling allows, so the ceiling always wins and the result cannot clip.
+    """
+    if not config.TTS_NORMALIZE:
+        return audio
+    target = 10.0 ** (config.TTS_LEVEL_DBFS / 20.0)
+    ceiling = 10.0 ** (-1.0 / 20.0)          # -1 dBFS, a little true headroom
+    # Measured over speech only: the silence between words would drag the
+    # average down and make every line come out too loud.
+    voiced = audio[np.abs(audio) > 0.005]
+    if voiced.size == 0:
+        return audio
+    rms = float(np.sqrt((voiced ** 2).mean()))
+    peak = float(np.abs(audio).max())
+    if rms <= 0.0 or peak <= 0.0:
+        return audio
+    gain = min(target / rms, ceiling / peak)
+    return (audio * gain).astype("float32")
+
+
 def resample(mono, source_rate: int, target_rate: int):
-    """Linear interpolation, which is plenty for speech.
+    """Rate-convert with a proper anti-imaging filter.
 
     Not optional: WASAPI shared mode refuses a mismatched rate outright with
     "Invalid sample rate" rather than converting, and Kokoro emits 24kHz while
     these cables are configured at 48kHz.
+
+    This used to be np.interp, described here as "plenty for speech". Measured,
+    it was not: linear interpolation attenuates the spectral images that
+    zero-stuffing creates but does not remove them, and 24k -> 48k left 27dB of
+    energy above 12kHz that Kokoro never produced. Kokoro's own output stops at
+    12kHz, so every bit of that was invented by the resampler, and it reads as
+    a hard, gritty edge on her voice.
+
+    Zero-stuff, low-pass with a windowed sinc, then decimate — the textbook
+    polyphase arrangement, written out rather than pulled from scipy, which is
+    not a dependency of the bot.
     """
     if source_rate == target_rate:
         return mono
-    count = int(len(mono) * target_rate / source_rate)
-    return np.interp(
-        np.linspace(0, len(mono) - 1, count, dtype="float64"),
-        np.arange(len(mono), dtype="float64"),
-        mono,
-    ).astype("float32")
+
+    from math import gcd
+
+    g = gcd(int(source_rate), int(target_rate))
+    up, down = int(target_rate) // g, int(source_rate) // g
+
+    x = np.asarray(mono, dtype="float64")
+    if up > 1:
+        stuffed = np.zeros(len(x) * up, dtype="float64")
+        stuffed[::up] = x
+    else:
+        stuffed = x
+
+    kernel = _antialias_kernel(max(up, down))
+    # Unity passband gain: zero-stuffing divides the signal's energy among the
+    # inserted zeros, so the filter has to put the factor back.
+    kernel = kernel * (up / kernel.sum())
+    filtered = np.convolve(stuffed, kernel, mode="same")
+    return filtered[::down].astype("float32")
 
 
 def decode_wav(payload: bytes):
@@ -397,6 +464,7 @@ class Speaker:
 
         mono, rate = await asyncio.to_thread(decode_wav, payload)
         audio = await asyncio.to_thread(resample, mono, rate, self._rate)
+        audio = await asyncio.to_thread(normalize, audio)
         stereo = np.column_stack([audio, audio])
 
         self._interrupt.clear()
@@ -463,6 +531,7 @@ class Speaker:
             try:
                 mono, rate = await asyncio.to_thread(decode_wav, payload)
                 audio = await asyncio.to_thread(resample, mono, rate, self._rate)
+                audio = await asyncio.to_thread(normalize, audio)
                 self._acks.append((line, np.column_stack([audio, audio])))
                 loaded += 1
             except Exception:

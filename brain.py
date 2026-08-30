@@ -1985,7 +1985,14 @@ class Brain:
                         "keep_alive": config.OLLAMA_KEEP_ALIVE,
                         "options": {
                             "temperature": 0.9,
-                            "num_predict": 260,
+                            # A spoken reply, not a written one. 260 tokens is
+                            # about thirty seconds of speech — long enough that
+                            # one wandering answer holds the room hostage, and
+                            # a model at temperature 0.9 does wander. Observed:
+                            # "say hi to Ray" came back as 32.4 seconds about
+                            # the third row and third column of a grid. Capping
+                            # it does not stop the wandering; it bounds it.
+                            "num_predict": config.CHAT_MAX_TOKENS,
                             # Stop before it writes the user's next line for
                             # them. Deliberately NOT "Athena:" — the model
                             # sometimes opens with its own label, and stopping

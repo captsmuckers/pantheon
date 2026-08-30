@@ -500,6 +500,22 @@ SETTINGS: tuple[Setting, ...] = (
        help="A ComfyUI graph in API format — not the format the editor saves "
             "by default. See workflows/README.md."),
 
+    _s("TTS_NORMALIZE", "bool", default=True, section="Speech", restart="bot",
+       help="Level her voice to a normal speaking level before it goes down "
+            "the cable. Kokoro delivers about -23 dBFS; broadcast speech sits "
+            "near -18, and the quiet end of Kokoro's range is where a voice "
+            "gate starts cutting syllables. Cannot clip — a -1 dBFS peak "
+            "ceiling always overrides the target."),
+    _s("TTS_LEVEL_DBFS", "float", default=-18.0, lo=-40.0, hi=-6.0,
+       section="Speech", restart="bot", advanced=True,
+       help="The RMS level to aim for, measured over speech only. Louder than "
+            "about -12 leaves no headroom for the peaks."),
+    _s("CHAT_MAX_TOKENS", "int", default=160, lo=40, hi=600, section="Model",
+       restart="bot", advanced=True,
+       help="Ceiling on a conversational reply. These get spoken, so length "
+            "is a listening cost: 260 tokens is roughly thirty seconds of "
+            "speech. The persona asks for a few lines; this enforces it when "
+            "the model ignores that."),
     _s("TTS_TIMEOUT", "float", default=60.0, lo=5, hi=600, section="Speech",
        advanced=True,
        help="Raise this if using a slow engine — chatterbox takes ~8s a reply."),

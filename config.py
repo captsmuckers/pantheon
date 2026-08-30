@@ -769,3 +769,14 @@ IMAGE_WORKFLOW_IMG2IMG = os.getenv(
 # into Superman" means. Local edits that must not touch the rest of the frame
 # — "give him corn rows" — need inpainting, not a lower number here.
 IMAGE_DENOISE = _float("IMAGE_DENOISE", 0.65)
+# Level her voice to a normal speaking level before it goes down the cable.
+# Kokoro delivers about -23 dBFS RMS; broadcast speech sits near -18, and the
+# quiet end of Kokoro's range is where Discord's voice gate starts cutting
+# syllables. Never clips: a -1 dBFS peak ceiling always overrides the target.
+TTS_NORMALIZE = _bool("TTS_NORMALIZE", True)
+TTS_LEVEL_DBFS = _float("TTS_LEVEL_DBFS", -18.0)
+# Ceiling on a conversational reply, in tokens. These get SPOKEN, so length is
+# a listening cost rather than a scrolling one: 260 is roughly thirty seconds.
+# The persona already asks for "a few lines"; this is what enforces it when a
+# model at temperature 0.9 ignores that.
+CHAT_MAX_TOKENS = _int("CHAT_MAX_TOKENS", 160) or 160
