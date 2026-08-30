@@ -53,6 +53,7 @@ SUITES = [
     ("episode phrasing", "test_episode_phrasing.py"),
     ("youtube links", "test_youtube_links.py"),
     ("karaoke", "test_karaoke.py"),
+    ("image generation", "test_imagegen.py"),
     ("spotify queue preserve", "test_spotify_queue_preserve.py"),
     ("spotify url", "test_spotify_url.py"),
     ("voice", "test_voice.py"),

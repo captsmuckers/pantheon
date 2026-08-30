@@ -1109,6 +1109,31 @@ TOOLS = [
         "description": "What is playing right now, position, and how much is left.",
         "input_schema": {"type": "object", "properties": {}},
     },
+    {
+        "name": "generate_image",
+        "description": (
+            "Draw a picture and post it to the channel. Use this when someone "
+            "asks you to draw, generate, make or imagine an image. Write a "
+            "full descriptive prompt rather than repeating their words back — "
+            "'a red fox asleep on a mossy log, morning light, shallow depth of "
+            "field' works, 'fox' does not. It takes up to a few minutes and "
+            "posts the image itself, so do not describe what you drew."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "Full description of the image to draw.",
+                },
+                "negative": {
+                    "type": "string",
+                    "description": "What to keep out. Usually leave unset.",
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
 ]
 
 
@@ -1342,6 +1367,9 @@ AUTHORITATIVE_TOOLS = {
     "play_media", "queue_media", "playback_control", "seek",
     "set_speed", "set_language", "karaoke",
     "music", "music_control", "music_queue", "music_play_uri", "music_radio",
+    # The image is the answer. Letting the model narrate over it produces
+    # "I've drawn you a fox!" attached to nothing, when generation failed.
+    "generate_image",
 }
 
 # Decides which model path a message takes once both deterministic layers have
@@ -2976,6 +3004,15 @@ class Controls:
                     }
                     for r in rows
                 ]
+
+            if name == "generate_image":
+                # Returns a Picture, which bot.py attaches. Never raises: a
+                # server that is off or slow must not take the bot with it.
+                import imagegen
+                return await imagegen.generate(
+                    args.get("prompt", ""),
+                    negative=args.get("negative", "") or "",
+                )
 
             if name == "get_status":
                 return self.player.status()

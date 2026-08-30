@@ -31,6 +31,7 @@ from spotify import SpotifyController
 import voice
 import speech
 import speakers
+import imagegen
 
 logging.basicConfig(
     level=logging.INFO,
@@ -342,6 +343,18 @@ async def _send_result(target, result, *, reply: bool = True, prefix: str = ""):
             sent = await target.send(body, view=view)
         view.message = sent  # so on_timeout can grey the dropdown out
         return sent
+
+    if isinstance(result, imagegen.Picture):
+        # The image is the reply. Discord wants a fresh file object per send,
+        # so this is built here rather than carried on the result — a retry
+        # with an already-consumed file posts an empty attachment.
+        import io as _io
+
+        upload = discord.File(_io.BytesIO(result.data), filename=result.filename)
+        body = f"{prefix}{result.text()}"[:1900]
+        if reply:
+            return await target.reply(body, file=upload, mention_author=False)
+        return await target.send(body, file=upload)
     text = f"{prefix}{result}"[:1900]
     if reply:
         return await target.reply(text, mention_author=False)

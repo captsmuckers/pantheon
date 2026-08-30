@@ -736,3 +736,26 @@ FREEZE_TIMEOUT = _int("FREEZE_TIMEOUT", 45) or 45
 RESUME_MIN_SECONDS = 60
 # ...and not past this fraction of the runtime.
 RESUME_MAX_FRACTION = 0.95
+# --- Image generation (ComfyUI, on another machine) ---
+# Off until there is a server to talk to, so a fresh checkout does not offer a
+# feature that cannot work. See imagegen.py and workflows/README.md.
+IMAGE_ENABLED = _bool("IMAGE_ENABLED", False)
+# ComfyUI's HTTP address. It must be reachable from this machine, which means
+# ComfyUI has to be started with --listen; it binds 127.0.0.1 by default.
+IMAGE_URL = os.getenv("IMAGE_URL", "http://127.0.0.1:8188").strip()
+# Generous, because it is sized for the hardware rather than for patience: an
+# 8GB card doing SDXL at 1024x1024 takes tens of seconds, and a quantised FLUX
+# with offloading takes minutes.
+IMAGE_TIMEOUT = _float("IMAGE_TIMEOUT", 300.0)
+# A ComfyUI graph in API format. Relative paths resolve next to this file.
+IMAGE_WORKFLOW = os.getenv("IMAGE_WORKFLOW", "workflows/sdxl.json").strip()
+# Blank keeps whatever the workflow was exported with, which is the right
+# default: the checkpoint that exists on the server is not knowable from here.
+IMAGE_CHECKPOINT = os.getenv("IMAGE_CHECKPOINT", "").strip()
+IMAGE_STEPS = _int("IMAGE_STEPS", 25) or 25
+IMAGE_CFG = _float("IMAGE_CFG", 7.0)
+IMAGE_WIDTH = _int("IMAGE_WIDTH", 1024) or 1024
+IMAGE_HEIGHT = _int("IMAGE_HEIGHT", 1024) or 1024
+IMAGE_NEGATIVE = os.getenv(
+    "IMAGE_NEGATIVE", "blurry, low quality, watermark, text, deformed"
+).strip()

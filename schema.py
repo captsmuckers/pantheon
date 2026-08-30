@@ -440,6 +440,53 @@ SETTINGS: tuple[Setting, ...] = (
             "arrive by independent paths with independent latency."),
 
     # -- Timeouts -----------------------------------------------------
+    # -- Images -------------------------------------------------------
+    #
+    # Generation runs on another machine; this side is only a client. All of
+    # these restart the bot, not some image service, because the bot is what
+    # reads them — the same trap TTS_VOICE fell into.
+    _s("IMAGE_ENABLED", "bool", default=False, section="Images", restart="bot",
+       help="Let her draw. Needs a ComfyUI server reachable at the address "
+            "below; off until there is one, so the command is not offered "
+            "when it cannot work."),
+    _s("IMAGE_URL", "str", default="http://127.0.0.1:8188", section="Images",
+       restart="bot",
+       help="ComfyUI's address. It binds 127.0.0.1 by default, so a server on "
+            "another machine must be started with --listen for this to reach "
+            "it."),
+    _s("IMAGE_CHECKPOINT", "str", section="Images", restart="bot",
+       help="Model file to load, as ComfyUI names it (for example "
+            "sd_xl_base_1.0.safetensors). Leave blank to use whatever the "
+            "workflow was exported with — which is the safer default, since "
+            "which checkpoints exist is a fact about the other machine."),
+    _s("IMAGE_STEPS", "int", default=25, lo=1, hi=150, section="Images",
+       restart="bot",
+       help="Sampler steps. More is slower, not reliably better; 20-30 is the "
+            "usual range for SDXL."),
+    _s("IMAGE_WIDTH", "int", default=1024, lo=256, hi=2048, section="Images",
+       restart="bot",
+       help="Width in pixels. SDXL was trained at 1024 and gets visibly worse "
+            "far below it."),
+    _s("IMAGE_HEIGHT", "int", default=1024, lo=256, hi=2048, section="Images",
+       restart="bot", help="Height in pixels."),
+    _s("IMAGE_NEGATIVE", "str",
+       default="blurry, low quality, watermark, text, deformed",
+       section="Images", restart="bot",
+       help="Applied to every image unless a request overrides it."),
+    _s("IMAGE_CFG", "float", default=7.0, lo=1.0, hi=30.0, section="Images",
+       restart="bot", advanced=True,
+       help="How hard the sampler is pushed toward the prompt. Above about 12 "
+            "images start to look burnt."),
+    _s("IMAGE_TIMEOUT", "float", default=300.0, lo=30, hi=1800,
+       section="Images", restart="bot", advanced=True,
+       help="How long to wait for one image. Sized for the hardware, not for "
+            "patience: SDXL on an 8GB card takes tens of seconds, a quantised "
+            "FLUX with offloading takes minutes."),
+    _s("IMAGE_WORKFLOW", "str", default="workflows/sdxl.json", section="Images",
+       restart="bot", advanced=True,
+       help="A ComfyUI graph in API format — not the format the editor saves "
+            "by default. See workflows/README.md."),
+
     _s("TTS_TIMEOUT", "float", default=60.0, lo=5, hi=600, section="Speech",
        advanced=True,
        help="Raise this if using a slow engine — chatterbox takes ~8s a reply."),
