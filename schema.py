@@ -272,7 +272,11 @@ SETTINGS: tuple[Setting, ...] = (
        help="kokoro is ~0.2s a reply and mispronounces proper nouns. chatterbox "
             "reads them correctly and takes ~8s, holding ~200% CPU while it "
             "does, which can break playback up on a loaded machine."),
-    _s("TTS_VOICE", "str", default="bf_emma", section="Speech", restart="tts",
+    # The bot, not the speech service: it sends the voice name on every
+    # synthesize call, and the server only falls back to its own --voice when
+    # a request omits one. Restarting the speech service therefore changes
+    # nothing, which looked exactly like the setting being ignored.
+    _s("TTS_VOICE", "str", default="bf_emma", section="Speech", restart="bot",
        help="Kokoro voice name. 54 are published. The first letter is the "
             "language: af_/am_ American, bf_/bm_ British, and so on. Use Test "
             "to hear one before saving it."),

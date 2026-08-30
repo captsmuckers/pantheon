@@ -168,11 +168,45 @@ def test_secrets_are_marked():
     check("nothing credential-shaped left unmarked", True)
 
 
+def test_restart_targets_name_the_process_that_reads_it():
+    """A setting must bounce whichever process actually reads it.
+
+    TTS_VOICE said restart="tts", which reads as obvious and is wrong: the bot
+    sends the voice name on every synthesize call and the speech service only
+    falls back to its own --voice when a request omits one. So restarting the
+    speech service applied nothing, the panel still reported the new voice
+    because it reads .env, and the setting looked simply broken.
+
+    Anything the bot reads through config.* has to restart the bot, whatever
+    the setting sounds like it belongs to.
+    """
+    print("\nrestart targets name the process that reads the setting")
+    root = Path(__file__).resolve().parent.parent
+    sources = list(root.glob("*.py")) + list(root.glob("commands/**/*.py"))
+    read_by_bot = set()
+    for path in sources:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        read_by_bot |= set(re.findall(r"config\.([A-Z][A-Z0-9_]+)", text))
+
+    # Without this the check below passes trivially when the glob finds nothing.
+    check(f"the bot's source was found ({len(read_by_bot)} settings read)",
+          len(read_by_bot) > 20)
+
+    wrong = [(s.name, s.restart) for s in schema.SETTINGS
+             if s.name in read_by_bot and s.restart != "bot"]
+    check("everything the bot reads restarts the bot", not wrong,
+          "; ".join(f"{n} says restart={r!r}" for n, r in wrong))
+
+
 def main():
     test_no_phantom_controls()
     test_nothing_undescribed_by_accident()
     test_every_setting_is_usable()
     test_secrets_are_marked()
+    test_restart_targets_name_the_process_that_reads_it()
     print(f"\n{sum(PASS)}/{len(PASS)} checks passed")
     return 0 if all(PASS) else 1
 
