@@ -453,6 +453,27 @@ It also refuses requests carrying a hostname it does not answer to, which is
 what stops a page on the internet pointing its own domain at `127.0.0.1` and
 driving the panel through your browser. Reach it as `127.0.0.1`.
 
+**A name instead of an IP, on your LAN only.** Typing an IP address gets old,
+and a public DNS record is the wrong tool if the panel is deliberately not
+exposed to the internet — it publishes the name globally and routes LAN traffic
+out to the public IP and back. Instead the machine publishes itself over
+Bonjour:
+
+```bash
+scripts/install-launchagents.sh    # installs this alongside the rest
+```
+
+The panel is then at **`http://pantheon.local:8086`** — no router
+configuration, no DNS provider, nothing to set up on the devices that use it,
+and the name never leaves the network. `PANEL_HOSTNAME` changes it.
+
+The address is resolved each time it is published rather than hardcoded,
+because DHCP can hand this machine a different one, and a stale record is worse
+than none: it resolves, and then nothing answers.
+
+You still have to add the name under **Security → Behind a reverse proxy**; the
+Host allowlist does not care that the machine published the name itself.
+
 **Behind a reverse proxy** — Nginx Proxy Manager, Caddy, Traefik — that check
 is the first thing you will hit. The proxy forwards its *own* hostname, which
 the panel has never heard of, so every request comes back **421**. Add the
