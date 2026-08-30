@@ -131,6 +131,26 @@ def _check_resample():
     if db >= -40:
         print(f"         imaging measured at {db:.1f} dB")
 
+
+    print("\ncurly punctuation survives long enough to be pronounced")
+    # The model writes typographic apostrophes. The emoji strip below them is
+    # text.encode("ascii", "ignore"), which removed them along with the emoji,
+    # so "You\u2019re" reached Kokoro as "Youre" — not a word, and it read as
+    # something between "you are" and nonsense. Reported as trouble with
+    # contractions, which it was: she was never given one. It survived because
+    # the straight-quote form was always fine, so half the replies were right.
+    for raw, want in [
+        ("You\u2019re not here.", "You're not here."),
+        ("That\u2019s Ray\u2019s dog.", "That's Ray's dog."),
+        ("He\u2019s late \u2014 I\u2019m not.", "He's late, I'm not."),
+        ("\u201cQuoted\u201d text\u2026 done.", '"Quoted" text... done.'),
+        ("You're fine.", "You're fine."),
+    ]:
+        check(f"{raw[:26]!r}", speech.sanitize_for_speech(raw), want)
+    check("emoji still go",
+          speech.sanitize_for_speech("Emoji \N{STUDIO MICROPHONE} gone."),
+          "Emoji gone.")
+
     print("\nlevelling cannot clip, whatever it is given")
     quiet = (np.sin(np.linspace(0, 400, 8000)) * 0.02).astype("float32")
     loud = (np.sin(np.linspace(0, 400, 8000)) * 0.99).astype("float32")

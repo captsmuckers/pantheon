@@ -59,6 +59,21 @@ _MD_CHARS = re.compile(r"[*_#>|]+")
 _WHITESPACE = re.compile(r"\s+")
 
 
+# Curly punctuation the model emits, mapped to what a TTS engine can read.
+# Dashes become commas rather than hyphens: a dash is a pause when spoken, and
+# Kokoro reads a bare hyphen as either nothing or the word.
+_SPACED_PUNCT = re.compile(r"\s+([,.;:!?])")
+
+_TYPOGRAPHIC = {
+    ord("\u2018"): "'", ord("\u2019"): "'",           # \u2018 \u2019
+    ord("\u201c"): '"', ord("\u201d"): '"',           # \u201c \u201d
+    ord("\u2013"): ",", ord("\u2014"): ",",           # en dash, em dash
+    ord("\u2026"): "...",                             # ellipsis
+    ord("\u00a0"): " ", ord("\u202f"): " ",           # non-breaking spaces
+    ord("\u2032"): "'", ord("\u02bc"): "'",           # prime, modifier apostrophe
+}
+
+
 def sanitize_for_speech(text: str, max_chars: int | None = None) -> str:
     """Flatten a reply into something worth reading aloud.
 
@@ -76,8 +91,18 @@ def sanitize_for_speech(text: str, max_chars: int | None = None) -> str:
     text = _MD_LINK.sub(r"\1", text)          # keep the label, drop the target
     text = _URL.sub("", text)
     text = _MD_CHARS.sub(" ", text)
+    # Typographic punctuation FIRST, or the ascii strip below eats it. The
+    # model writes curly apostrophes, so "You\u2019re" became "Youre" — not a
+    # word, and Kokoro read it as something between "you are" and nonsense.
+    # Reported as her struggling with contractions, which she was, because she
+    # was never given one. The straight-quote version came through fine, which
+    # is why this survived: half the replies were correct.
+    text = text.translate(_TYPOGRAPHIC)
     text = text.encode("ascii", "ignore").decode()   # emoji and friends
     text = _WHITESPACE.sub(" ", text).strip()
+    # A dash that was spaced — like this — leaves " ," behind once it becomes a
+    # comma. Harmless in print, but it is a token boundary to a TTS engine.
+    text = _SPACED_PUNCT.sub(r"\1", text)
 
     if len(text) > max_chars:
         cut = text[:max_chars]
