@@ -266,11 +266,47 @@ def test_the_two_failures_that_used_to_hang():
     _StubComfy.reject = _StubComfy.empty = False
 
 
+def test_an_image_request_reaches_the_tool():
+    """The routing bug that made the whole feature look broken.
+
+    The intent classifier calls an image request CHAT — measured on qwen3:8b,
+    5 of 7 phrasings — because "draw me something" reads exactly like "write me
+    a poem". CHAT attaches no tools, so she discussed drawing instead of
+    drawing, and the failure looked like the ComfyUI integration rather than
+    routing. _DRAW_REQUEST settles it before either chat route runs.
+    """
+    print("\nimage requests route to the tool path, not to conversation")
+    import brain
+
+    for text in ("draw me a fox",
+                 "athena draw a picture of a snow leopard",
+                 "make me an image of a castle at night",
+                 "generate an image of a robot",
+                 "paint something cool",
+                 "sketch a dragon",
+                 "please draw a cat",
+                 "create a painting of a harbour"):
+        check(f"drawn: {text!r}", bool(brain._DRAW_REQUEST.match(text)), True)
+
+    print("\n  and these must NOT be hijacked into generating an image")
+    for text in ("can you draw?",          # a question about her, not a request
+                 "make me a sandwich",     # weak verb, no image noun
+                 "write me a poem",        # the chat route owns this
+                 "tell me a joke",
+                 "what can you do",
+                 "play Dune",
+                 "skip",
+                 "make it louder"):
+        check(f"left alone: {text!r}",
+              bool(brain._DRAW_REQUEST.match(text)), False)
+
+
 for fn in (test_the_shipped_workflow_is_usable,
            test_patch_follows_links_not_node_ids,
            test_a_whole_generation,
            test_nothing_reaches_the_bot_as_an_exception,
-           test_the_two_failures_that_used_to_hang):
+           test_the_two_failures_that_used_to_hang,
+           test_an_image_request_reaches_the_tool):
     fn()
 
 print(f"\n{sum(PASS)}/{len(PASS)} checks passed")

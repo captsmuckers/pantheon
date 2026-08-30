@@ -307,6 +307,31 @@ _STREAM_STATUS = re.compile(
 # through as "Athena tell david a poem using the end" (Whisper mangled "the N
 # word" on the way in) and missed this pattern for want of that one word,
 # reaching the tool path and returning a search for movies named "David".
+# The intent classifier reliably calls an image request CHAT — measured on
+# qwen3:8b, 5 of 7 phrasings, including "draw me a fox" and "generate an image
+# of a robot". It is not being stupid: "draw me something" reads exactly like
+# "write me a poem", which CHAT is explicitly meant to catch. But CHAT attaches
+# no tools, so she would discuss drawing instead of drawing.
+#
+# Fixed here rather than in INTENT_PROMPT, whose wording was measured and whose
+# two previous rewrites both made it worse. Same remedy the capability
+# questions got: settle the category the classifier is known to miss before it
+# ever runs.
+#
+# Split by verb strength. "draw" and "paint" can only mean an image, so they
+# need no noun. "make" and "create" need one, or "make me a sandwich" becomes a
+# generation request. A leading "can you" is left alone deliberately: that is a
+# question about her abilities, and belongs in conversation.
+_DRAW_REQUEST = re.compile(
+    r"^(?:athena[\s,]+)?(?:please\s+)?"
+    r"(?:"
+    r"(?:draw|paint|sketch|illustrate)\s+\S"
+    r"|(?:make|generate|create|render|imagine)\s+(?:me\s+)?(?:a|an|some)?\s*"
+    r"(?:picture|image|drawing|painting|artwork|art)\b"
+    r")",
+    re.I,
+)
+
 _CHAT_REQUEST = re.compile(
     r"^(?:"
     r"(?:tell|write|give|make|say)\s+(?:\w+\s+)?(?:a|an|another|some)?\s*"
@@ -1590,11 +1615,20 @@ class Brain:
         # A short follow-up to a live conversation is decided here rather than
         # by the classifier, which judges each message alone and read "make it
         # darker" as a subtitle command.
-        if self._is_chat_followup(text):
+        # An image request has to clear both chat routes below, not just the
+        # classifier. _is_chat_followup would swallow it as well: "draw me a
+        # fox" is four words with no media word in it, which is exactly the
+        # shape that rule is looking for. Gated on the feature being on, so
+        # nothing about routing changes while there is no image server.
+        drawing = config.IMAGE_ENABLED and bool(_DRAW_REQUEST.match(text))
+        if drawing:
+            log.info("intent: MEDIA (image request) — %r", text[:60])
+
+        if not drawing and self._is_chat_followup(text):
             log.info("intent: CHAT (follow-up) — %r", text[:60])
             return await self.chat_only(text)
 
-        if await self.classify_intent(text) == "CHAT":
+        if not drawing and await self.classify_intent(text) == "CHAT":
             return await self.chat_only(text)
 
         # Tier 2. Serialized, because self.history is one transcript shared by
