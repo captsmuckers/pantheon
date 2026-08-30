@@ -115,6 +115,8 @@ class _StubComfy(BaseHTTPRequestHandler):
 
     polls = 0
     fail = False
+    reject = False       # 200 with node_errors — a rejected workflow
+    empty = False        # finishes successfully but produces no image
 
     def log_message(self, *a):
         pass
@@ -129,22 +131,50 @@ class _StubComfy(BaseHTTPRequestHandler):
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
-        self._json({"prompt_id": "job1"})
+        if _StubComfy.reject:
+            # Observed: a rejected workflow is still 200 WITH a prompt_id.
+            return self._json({
+                "prompt_id": "job1", "number": 0,
+                "node_errors": {"4": {"errors": [
+                    {"type": "value_not_in_list",
+                     "message": "ckpt_name: 'nope.safetensors' not in list"}
+                ]}},
+            })
+        self._json({"prompt_id": "job1", "number": 0, "node_errors": {}})
 
     def do_GET(self):
         path = urlparse(self.path).path
         if path == "/history/job1":
             _StubComfy.polls += 1
             if _StubComfy.fail:
-                return self._json({"job1": {"outputs": {},
-                                            "status": {"status_str": "error"}}})
+                return self._json({"job1": {
+                    "outputs": {},
+                    "status": {"status_str": "error", "completed": False,
+                               "messages": [["execution_error", {}]]},
+                }})
+            if _StubComfy.empty:
+                # Ran to completion and produced nothing. Before the fix this
+                # polled until the timeout and then blamed the timeout.
+                return self._json({"job1": {
+                    "outputs": {},
+                    "status": {"status_str": "success", "completed": True,
+                               "messages": [["execution_success", {}]]},
+                }})
             # First poll is deliberately empty: a real server accepts the job
             # before it has run it, and the client must keep waiting.
             if _StubComfy.polls < 2:
                 return self._json({})
-            return self._json({"job1": {"outputs": {"9": {"images": [
-                {"filename": "athena_001.png", "subfolder": "", "type": "output"}
-            ]}}}})
+            return self._json({"job1": {
+                "prompt": [0, "job1", {}, {"create_time": 0}, ["9"]],
+                "outputs": {"9": {"images": [
+                    {"filename": "athena_001.png", "subfolder": "",
+                     "type": "output"}
+                ]}},
+                "status": {"status_str": "success", "completed": True,
+                           "messages": [["execution_start", {}],
+                                        ["execution_success", {}]]},
+                "meta": {"9": {"node_id": "9", "real_node_id": "9"}},
+            }})
         if path == "/view":
             self.send_response(200)
             self.send_header("Content-Type", "image/png")
@@ -172,6 +202,7 @@ def _with_stub(fn):
 def test_a_whole_generation():
     print("\nsubmit, poll, and fetch the finished image")
     _StubComfy.polls, _StubComfy.fail = 0, False
+    _StubComfy.reject = _StubComfy.empty = False
 
     result = _with_stub(lambda: asyncio.run(imagegen.generate("a fox")))
     check("returns a Picture", isinstance(result, imagegen.Picture), True)
@@ -202,6 +233,7 @@ def test_nothing_reaches_the_bot_as_an_exception():
     check("an unreachable server is a sentence", isinstance(dead, str), True)
 
     _StubComfy.polls, _StubComfy.fail = 0, True
+    _StubComfy.reject = _StubComfy.empty = False
     broke = _with_stub(lambda: asyncio.run(imagegen.generate("a fox")))
     check("a server-side error is a sentence", isinstance(broke, str), True)
 
@@ -209,10 +241,36 @@ def test_nothing_reaches_the_bot_as_an_exception():
     check("the health check never raises either", isinstance(ok, bool), True)
 
 
+def test_the_two_failures_that_used_to_hang():
+    print("\nfailures the server reports are believed, not waited out")
+    # Both of these previously polled to IMAGE_TIMEOUT and then reported a
+    # timeout, hiding the real cause. Timeout is 15s under the stub, so a
+    # regression here shows up as a slow test as well as a wrong answer.
+    _StubComfy.polls, _StubComfy.fail = 0, False
+    _StubComfy.reject, _StubComfy.empty = True, False
+    import time as _t
+    started = _t.monotonic()
+    out = _with_stub(lambda: asyncio.run(imagegen.generate("a fox")))
+    took = _t.monotonic() - started
+    check("a rejected workflow is reported, not polled",
+          isinstance(out, str) and "refused" in out, True)
+    check("and reported immediately", took < 5, True)
+
+    _StubComfy.polls, _StubComfy.fail = 0, False
+    _StubComfy.reject, _StubComfy.empty = False, True
+    started = _t.monotonic()
+    out = _with_stub(lambda: asyncio.run(imagegen.generate("a fox")))
+    took = _t.monotonic() - started
+    check("a finished-but-empty run is reported", isinstance(out, str), True)
+    check("and not waited out to the timeout", took < 5, True)
+    _StubComfy.reject = _StubComfy.empty = False
+
+
 for fn in (test_the_shipped_workflow_is_usable,
            test_patch_follows_links_not_node_ids,
            test_a_whole_generation,
-           test_nothing_reaches_the_bot_as_an_exception):
+           test_nothing_reaches_the_bot_as_an_exception,
+           test_the_two_failures_that_used_to_hang):
     fn()
 
 print(f"\n{sum(PASS)}/{len(PASS)} checks passed")

@@ -149,7 +149,19 @@ async def generate(prompt: str, *, negative: str = "", seed: int | None = None,
         async with httpx.AsyncClient(timeout=30) as client:
             queued = await client.post(f"{base}/prompt", json={"prompt": graph})
             queued.raise_for_status()
-            job = queued.json().get("prompt_id")
+            accepted = queued.json()
+
+            # A rejected workflow still comes back 200 with a prompt_id, and
+            # node_errors is the only thing that says otherwise. Missing this
+            # meant polling a job that was never going to run, right up to the
+            # timeout, and then blaming the timeout.
+            broken = accepted.get("node_errors") or {}
+            if broken:
+                log.warning("Workflow rejected by the server: %s", broken)
+                return ("The image server refused that workflow — it usually "
+                        "means the checkpoint name is wrong.")
+
+            job = accepted.get("prompt_id")
             if not job:
                 return "The image server took the job but gave me no id for it."
 
@@ -171,8 +183,13 @@ async def generate(prompt: str, *, negative: str = "", seed: int | None = None,
                     for img in out.get("images", [])
                 ]
                 if not images:
+                    # status_str is "success" or "error"; completed says the run
+                    # is over either way. Finished with nothing to show is a
+                    # failure, and waiting out the timeout only delays saying so.
                     status = entry.get("status", {})
-                    if status.get("status_str") == "error":
+                    if (status.get("status_str") == "error"
+                            or status.get("completed")):
+                        log.warning("Run finished with no image: %s", status)
                         return "The image server failed on that one."
                     continue
 
@@ -211,7 +228,11 @@ async def reachable() -> tuple[bool, str]:
             r = await client.get(f"{config.IMAGE_URL.rstrip('/')}/system_stats")
             r.raise_for_status()
             devices = r.json().get("devices") or [{}]
-            name = devices[0].get("name", "unknown GPU")
+            # Observed: "cuda:0 NVIDIA GeForce RTX 2060 SUPER : cudaMallocAsync".
+            # Strip the device prefix and the allocator suffix, leaving the card.
+            import re as _re
+            raw = devices[0].get("name", "unknown GPU")
+            name = _re.sub(r"^\w+:\d+\s*", "", raw).split(" : ")[0].strip() or raw
             free = devices[0].get("vram_free")
             if isinstance(free, int):
                 return True, f"{name}, {free / 1024**3:.1f}GB free"
