@@ -25,8 +25,11 @@ import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 import logging
+from pathlib import Path
 
-LOG = "/Users/llm-mac/athena/logs/system-health.log"
+# Resolved from this file rather than hardcoded: an absolute home path
+# works on exactly one machine and fails silently everywhere else.
+LOG = str(Path(__file__).resolve().parent.parent / "logs" / "system-health.log")
 INTERVAL = 20
 
 # The processes worth watching: the two things we restart, the two things
