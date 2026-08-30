@@ -1448,6 +1448,21 @@ INTENT_TIMEOUT = 10.0
 # up without the prompt growing unbounded.
 CHAT_HISTORY_TURNS = 6
 
+# How much of the opening has to match before a reply counts as the previous
+# one again, and how long a reply must be before the test applies at all.
+CHAT_REPEAT_CHARS = 40
+CHAT_REPEAT_MIN = 25
+REPEAT_NUDGE = (
+    "You have just said this. Do not say it again — not the same words, not "
+    "the same shape of sentence. Answer differently."
+)
+
+
+def _flatten(text: str) -> str:
+    """Lowercase, strip punctuation and collapse spaces, for comparing two
+    replies that are the same answer typed slightly differently."""
+    return re.sub(r"[^a-z0-9 ]+", "", (text or "").lower()).strip()
+
 # How long a conversation stays "live" for the follow-up rule below. Long
 # enough to finish a thought, short enough that a command an hour later is
 # judged on its own.
@@ -1783,7 +1798,10 @@ class Brain:
                         content = ""  # this wasn't a real answer, don't treat it as one
 
                 if content:
-                    final_text = content
+                    # The tool path can loop exactly as the chat path did; the
+                    # commit that added this guard claimed to cover both and
+                    # only ever covered one.
+                    final_text = flavor.strip_repetition(content)
                 full_messages.append({"role": "assistant", "content": content, "tool_calls": tool_calls})
 
                 if not tool_calls:
@@ -1975,6 +1993,26 @@ class Brain:
         log.info("intent: %s — %r", verdict, text[:60])
         return verdict
 
+    def _repeats_last_reply(self, reply: str) -> bool:
+        """Is this her previous answer over again?
+
+        Compared on the opening only, normalised, because the tail is where a
+        truncated reply differs while the substance is identical. Short answers
+        are exempt: "Fine." and "No." are allowed to recur, and a prefix test
+        on three words would call every one of them a repeat.
+        """
+        if not reply or not self._chat_history:
+            return False
+        previous = next(
+            (t.get("content") or "" for t in reversed(self._chat_history)
+             if t.get("role") == "assistant"),
+            "",
+        )
+        now, before = _flatten(reply), _flatten(previous)
+        if len(now) < CHAT_REPEAT_MIN or len(before) < CHAT_REPEAT_MIN:
+            return False
+        return now[:CHAT_REPEAT_CHARS] == before[:CHAT_REPEAT_CHARS]
+
     async def chat_only(self, text: str) -> str:
         """Answer conversationally, with NO tools attached.
 
@@ -2018,9 +2056,8 @@ class Brain:
             "told. Asked what their favourite band is when they just named it, "
             "the reply opens with the band."
         )
-        try:
-            async with httpx.AsyncClient(timeout=config.OLLAMA_TIMEOUT) as client:
-                response = await client.post(
+        async def ask(client, nudge: str = "") -> str:
+            response = await client.post(
                     f"{config.OLLAMA_HOST}/api/chat",
                     json={
                         "model": config.OLLAMA_MODEL,
@@ -2052,13 +2089,36 @@ class Brain:
                             [{"role": "system", "content": system}]
                             + self._chat_history
                             + [{"role": "user", "content": text}]
+                            # As a user turn, not appended to the system
+                            # prompt. Measured against a reply that was
+                            # genuinely stuck: in the system prompt it changed
+                            # nothing at all, 4 times out of 4, because the
+                            # copied answer sits far later in the context and
+                            # wins. The same words as the last thing she reads
+                            # break it 4 times out of 4.
+                            + ([{"role": "user", "content": nudge}] if nudge else [])
                         ),
                     },
                 )
-                response.raise_for_status()
-                reply = ((response.json().get("message") or {}).get("content") or "").strip()
-                reply = flavor.strip_repetition(
-                    flavor.strip_transcript(reply))
+            response.raise_for_status()
+            out = ((response.json().get("message") or {}).get("content") or "").strip()
+            return flavor.strip_transcript(out)
+
+        try:
+            async with httpx.AsyncClient(timeout=config.OLLAMA_TIMEOUT) as client:
+                reply = await ask(client)
+                # She reads her own last answer out of the history and says it
+                # again, word for word — three identical replies to "tell me a
+                # joke", and then the same sentence pattern applied to an
+                # unrelated question about someone else. Sampling penalties
+                # were no use: repeat_last_n gave 5/5 distinct one run and 3/5
+                # the next, which is not something to tune against. Asking once
+                # more, having told her, is exact.
+                if self._repeats_last_reply(reply):
+                    log.info("chat: repeated the previous reply, asking again")
+                    second = await ask(client, REPEAT_NUDGE)
+                    if second and not self._repeats_last_reply(second):
+                        reply = second
         except Exception:
             log.exception("Chat reply failed")
             return "Not now."

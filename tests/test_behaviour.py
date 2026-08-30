@@ -513,6 +513,44 @@ async def test_karaoke_window_swap_failure_is_reported():
     # show_window() returning False, which the first case already covers.
 
 
+async def test_she_does_not_say_the_same_thing_twice():
+    """Observed live: three identical replies, then the pattern bleeding out.
+
+        "tell me a joke"        -> "You're not in the mood for a joke..."
+        "tell me another joke"  -> the same sentence, word for word
+        "tell me a joke"        -> the same sentence again
+        "what is Felipe in the mood for?" -> the same shape, name swapped
+
+    She reads her own last answer out of the chat history and repeats it. Not
+    caused by any prompt wording — it reproduced with the joke instruction
+    removed — and not fixable by sampling: repeat_last_n gave 5/5 distinct one
+    run and 3/5 the next, which is nothing to tune against.
+    """
+    print("\nshe is not allowed to repeat her own last reply")
+    import brain as brain_mod
+
+    b = brain_mod.Brain.__new__(brain_mod.Brain)
+    previous = ("You're not in the mood for a joke. You're in the mood for "
+                "something that doesn't exist.")
+    b._chat_history = [{"role": "user", "content": "tell me a joke."},
+                       {"role": "assistant", "content": previous}]
+
+    check("word for word is caught", b._repeats_last_reply(previous))
+    check("so is the same opening with a different tail",
+          b._repeats_last_reply(previous[:60] + " And another thing entirely."))
+    check("a different answer is left alone",
+          not b._repeats_last_reply("I don't have time for jokes. Ask someone else."))
+
+    print("  short answers are exempt — 'Fine.' twice is not a fault")
+    b._chat_history = [{"role": "user", "content": "stop"},
+                       {"role": "assistant", "content": "Fine."}]
+    check("'Fine.' may recur", not b._repeats_last_reply("Fine."))
+    check("'No.' may recur", not b._repeats_last_reply("No."))
+
+    b._chat_history = []
+    check("nothing to repeat yet", not b._repeats_last_reply(previous))
+
+
 async def main():
     await test_fullscreen_is_reasserted_after_music()
     await test_karaoke_window_swap_failure_is_reported()
@@ -537,6 +575,7 @@ async def main():
     await test_fallback_skipped_when_spotify_is_down()
     await test_music_shaped_requests_skip_the_model()
     await test_doubled_verb_is_stripped_for_spotify()
+    await test_she_does_not_say_the_same_thing_twice()
     print(f"\n{sum(PASS)}/{len(PASS)} checks passed")
     if not all(PASS):
         sys.exit(1)
