@@ -15,8 +15,10 @@ function paint(state) {
 function paintTls(state) {
   const t = (state && state.tls) || {};
   const box = document.getElementById('tls-state');
-  document.getElementById('tls-cert').value = t.cert || '';
-  document.getElementById('tls-key').value = t.key || '';
+  const certEl = document.getElementById('tls-cert');
+  const keyEl = document.getElementById('tls-key');
+  if (certEl) certEl.value = t.cert || '';
+  if (keyEl) keyEl.value = t.key || '';
   if (!box) return;
   if (!t.configured) {
     box.innerHTML = `<div><span class="k">HTTPS</span><b>off</b></div>
@@ -35,11 +37,23 @@ function paintTls(state) {
     <div><span class="k">Covers</span><span>${(t.names || []).map(escapeHtml).join(', ') || '—'}</span></div>`;
 }
 
-document.getElementById('tls-form').addEventListener('submit', e => {
+/* Bound defensively. Static files are re-read from disk on every request but
+   the page markup is baked into the imported module, so a panel restarted at
+   the same moment a page changed can serve NEW script against OLD html. The
+   script then throws on the first missing element and every handler after it
+   silently never registers — which looks exactly like a button that does
+   nothing. Reported as "I hit save hostnames and nothing happened". */
+function on(id, event, fn) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener(event, fn);
+  else console.warn(`security.js: #${id} is missing — the page and script may be out of step; restart the panel`);
+}
+
+on('tls-form', 'submit', e => {
   e.preventDefault();
   post('/api/security', {
-    tls_cert: document.getElementById('tls-cert').value,
-    tls_key: document.getElementById('tls-key').value,
+    tls_cert: (document.getElementById('tls-cert') || {}).value || '',
+    tls_key: (document.getElementById('tls-key') || {}).value || '',
   }).then(r => {
     toast(r.ok ? (r.data.message || 'Saved.') : r.data.error, r.ok ? 'good' : 'bad');
     if (r.ok) { paint(r.data.state); paintTls(r.data.state); }
@@ -56,17 +70,17 @@ function paintHosts(state) {
   }
 }
 
-document.getElementById('hosts-form').addEventListener('submit', e => {
+on('hosts-form', 'submit', e => {
   e.preventDefault();
   post('/api/security', {
-    extra_hosts: document.getElementById('extra-hosts').value
+    extra_hosts: (document.getElementById('extra-hosts') || {}).value || ''
   }).then(r => {
     toast(r.ok ? (r.data.message || 'Saved.') : r.data.error, r.ok ? 'good' : 'bad');
     if (r.ok) { paint(r.data.state); paintHosts(r.data.state); paintTls(r.data.state); }
   }).catch(() => {});
 });
 
-document.getElementById('password-form').addEventListener('submit', e => {
+on('password-form', 'submit', e => {
   e.preventDefault();
   post('/api/security', {
     password: document.getElementById('password').value,
@@ -81,7 +95,7 @@ document.getElementById('password-form').addEventListener('submit', e => {
   }).catch(() => {});
 });
 
-document.getElementById('remote').addEventListener('change', e => {
+on('remote', 'change', e => {
   post('/api/security', { remote_access: e.target.checked }).then(r => {
     toast(r.ok ? r.data.message : r.data.error, r.ok ? 'good' : 'bad');
     if (r.ok) { paint(r.data.state); paintHosts(r.data.state); paintTls(r.data.state); }
