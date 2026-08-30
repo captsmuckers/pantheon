@@ -459,7 +459,15 @@ async def _handle_voice_command(text: str):
     # talk over a room that never asked. This is also the case that motivated
     # speech at all: an ambiguous request posts a dropdown, and without hearing
     # "which one?" it just looks like she ignored you.
-    spoken = result.text() if isinstance(result, (Choice, MusicChoice)) else str(result)
+    if isinstance(result, (Choice, MusicChoice)):
+        spoken = result.text()
+    elif isinstance(result, imagegen.Picture):
+        # The image is already in the channel. Speaking str(result) read the
+        # generated prompt aloud — 8.2 seconds of style keywords describing
+        # something everyone could already see.
+        spoken = result.spoken()
+    else:
+        spoken = str(result)
     await speech.say(spoken)
 
     # Returned only so the tuning log records what she said back.

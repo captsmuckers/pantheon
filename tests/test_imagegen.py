@@ -457,6 +457,24 @@ def test_a_generated_image_survives_the_tool_loop():
         check("json.dumps with default=str tolerates anything", False, True)
 
 
+def test_the_caption_is_read_but_not_spoken():
+    """She read the whole generated prompt out loud — 8.2 seconds of it.
+
+    str(Picture) is the caption, which is right for the channel and wrong for
+    the room: the prompt is written for a diffusion model, so out loud it is a
+    pile of style keywords describing something already on screen.
+    """
+    print("\nthe caption is posted; something short is spoken")
+    pic = imagegen.Picture(b"x", "a.png",
+                           "an anime stoner girl with a bong, cute and relaxed "
+                           "expression, vibrant colors, detailed anime style", 20.4)
+    check("the caption carries the prompt", "anime stoner girl" in pic.text(), True)
+    check("and the duration", "20s" in pic.text(), True)
+    check("the spoken form is short", len(pic.spoken()) < 30, True)
+    check("and does not read the prompt back",
+          "anime" in pic.spoken().lower(), False)
+
+
 for fn in (test_the_shipped_workflow_is_usable,
            test_patch_follows_links_not_node_ids,
            test_a_whole_generation,
@@ -465,7 +483,8 @@ for fn in (test_the_shipped_workflow_is_usable,
            test_an_image_request_reaches_the_tool,
            test_an_attached_picture_is_worked_from,
            test_edit_phrasings_route_to_the_tool,
-           test_a_generated_image_survives_the_tool_loop):
+           test_a_generated_image_survives_the_tool_loop,
+           test_the_caption_is_read_but_not_spoken):
     fn()
 
 print(f"\n{sum(PASS)}/{len(PASS)} checks passed")

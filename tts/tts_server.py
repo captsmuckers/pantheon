@@ -399,6 +399,19 @@ def _synth_chatterbox(text: str, device: str) -> bytes:
     return buf.getvalue()
 
 
+def _release_device_memory(device: str) -> None:
+    """Return the accelerator's cached blocks. Never raises into a request."""
+    try:
+        import torch
+
+        if device == "mps" and hasattr(torch, "mps"):
+            torch.mps.empty_cache()
+        elif device == "cuda" and torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # pragma: no cover - a cleanup step must not fail a reply
+        log.debug("Could not release device memory", exc_info=True)
+
+
 def synthesize(text: str, voice: str, device: str, lang: str = None) -> bytes:
     """Return a WAV. One inference at a time — the model is not thread-safe.
 
@@ -411,9 +424,17 @@ def synthesize(text: str, voice: str, device: str, lang: str = None) -> bytes:
     pipeline = get_pipeline(device, lang or lang_for(voice))
     with _lock:
         chunks = [audio for _, _, audio in pipeline(text, voice=voice, speed=1.0)]
-    if not chunks:
-        return b""
-    audio = np.concatenate([c.detach().cpu().numpy() for c in chunks])
+        if not chunks:
+            return b""
+        audio = np.concatenate([c.detach().cpu().numpy() for c in chunks])
+        # Hand the intermediate tensors back before releasing the lock.
+        # Measured on this machine: without it the server grew 748MB over 20
+        # requests — about 37MB a line, never returned — because torch's MPS
+        # allocator keeps freed blocks in its own cache, and on Apple silicon
+        # that cache is unified memory, so it shows up as the process simply
+        # getting bigger until the machine is rebooted.
+        del chunks
+        _release_device_memory(device)
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:

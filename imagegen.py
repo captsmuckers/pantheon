@@ -70,7 +70,17 @@ class Picture:
         self.seconds = seconds
 
     def text(self) -> str:
+        """The caption posted beside the image. Worth reading, not hearing."""
         return f"“{self.prompt}” — {self.seconds:.0f}s"
+
+    def spoken(self) -> str:
+        """What to say out loud, which is not the caption.
+
+        The prompt is written for a diffusion model, not for a person: it is a
+        comma-separated pile of style words. Read aloud it took 8.2 seconds to
+        tell the room something already on their screen.
+        """
+        return "Done."
 
     def __str__(self) -> str:
         return self.text()
