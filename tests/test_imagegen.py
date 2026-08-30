@@ -370,6 +370,93 @@ def test_edit_phrasings_route_to_the_tool():
               bool(brain._EDIT_REQUEST.match(text)), False)
 
 
+def test_a_generated_image_survives_the_tool_loop():
+    """The bug that threw away an image after the GPU had already made it.
+
+    dispatch() returns a Picture, and the tool loop fed every result straight
+    into json.dumps() to show the model what came back. json.dumps raises on a
+    Picture, so the turn died AFTER 20.7 seconds of generation and the user got
+    "Something went wrong talking to the language model" — with the finished
+    PNG sitting on the server.
+
+    Two faults in one line: the dump ran before the authoritative check, and
+    that check required isinstance(result, str), which a Picture is not, so it
+    could never have been recognised even without the crash.
+    """
+    print("\na generated image survives the tool-calling loop")
+    import asyncio as _asyncio
+    import httpx as _httpx
+    import brain as brain_mod
+
+    picture = imagegen.Picture(b"PNGBYTES", "athena_00002_.png",
+                               "a dog at the park", 20.7)
+    check("a Picture is recognised as the reply itself",
+          brain_mod._is_final_object(picture), True)
+    check("an ordinary string is not", brain_mod._is_final_object("ok"), False)
+
+    class Controls:
+        def state(self):
+            return {"playing": False}
+
+        async def dispatch(self, name, args):
+            return picture
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"message": {"content": "", "tool_calls": [
+                {"function": {"name": "generate_image",
+                              "arguments": {"prompt": "a dog at the park"}}}
+            ]}}
+
+    class Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None):
+            return Response()
+
+    b = brain_mod.Brain.__new__(brain_mod.Brain)
+    b.controls = Controls()
+    b.history = []
+    b._lock = _asyncio.Lock()
+    b._verbatim_tool = None
+    b.backend = "ollama"
+    b.narrator = type("N", (), {"wants": lambda *a, **k: False})()
+
+    original = _httpx.AsyncClient
+    _httpx.AsyncClient = Client
+    try:
+        reply = _asyncio.run(b._ask_ollama("make a picture of a dog at the park"))
+    finally:
+        _httpx.AsyncClient = original
+
+    check("the turn does not crash", reply is not None, True)
+    check("and the Picture itself comes back, not a description of it",
+          reply is picture, True)
+
+    print("\n  and an unforeseen result can no longer kill the turn")
+    import json as _json
+
+    class Odd:
+        def __repr__(self):
+            return "<odd>"
+
+    try:
+        _json.dumps({"x": Odd()}, default=str)
+        check("json.dumps with default=str tolerates anything", True, True)
+    except TypeError:
+        check("json.dumps with default=str tolerates anything", False, True)
+
+
 for fn in (test_the_shipped_workflow_is_usable,
            test_patch_follows_links_not_node_ids,
            test_a_whole_generation,
@@ -377,7 +464,8 @@ for fn in (test_the_shipped_workflow_is_usable,
            test_the_two_failures_that_used_to_hang,
            test_an_image_request_reaches_the_tool,
            test_an_attached_picture_is_worked_from,
-           test_edit_phrasings_route_to_the_tool):
+           test_edit_phrasings_route_to_the_tool,
+           test_a_generated_image_survives_the_tool_loop):
     fn()
 
 print(f"\n{sum(PASS)}/{len(PASS)} checks passed")

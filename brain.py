@@ -1537,6 +1537,20 @@ OLLAMA_TOOLS = [
 # History trimming
 # ----------------------------------------------------------------------
 
+def _is_final_object(result) -> bool:
+    """True for a result that is the answer itself, not a fact about one.
+
+    Kept as a function rather than a bare isinstance so the list of these has
+    one home. imagegen imports only config and the standard library, so this
+    does not drag numpy into a module that must import without it.
+    """
+    try:
+        import imagegen
+    except Exception:  # pragma: no cover - imagegen is part of the bot
+        return False
+    return isinstance(result, imagegen.Picture)
+
+
 def _trim_ollama_history(messages: list[dict], keep: int = HISTORY_TURNS * 2) -> list[dict]:
     """Trim the transcript without ever splitting a tool call from its result.
 
@@ -1820,8 +1834,29 @@ class Brain:
                             args = {}
                     log.info("tool_call (ollama): %s %s", name, args)
                     result = await self.controls.dispatch(name, args)
+
+                    # Some results ARE the reply rather than something for the
+                    # model to describe. A Picture carries image bytes bound
+                    # for a Discord attachment, and json.dumps() raises on it —
+                    # which is exactly how this surfaced: an image that had
+                    # already been generated, 20.7s of GPU time, was thrown
+                    # away and the user got "Something went wrong talking to
+                    # the language model". Ship it and stop the loop.
+                    if _is_final_object(result):
+                        full_messages.append(
+                            {"role": "tool", "content": _json.dumps(str(result))}
+                        )
+                        final_text = result
+                        authoritative_hit = True
+                        shipped_verbatim = True
+                        self._verbatim_tool = name
+                        continue
+
                     full_messages.append(
-                        {"role": "tool", "content": _json.dumps(result)[:4000]}
+                        # default=str so that a result nobody anticipated
+                        # degrades to its text rather than killing the turn.
+                        {"role": "tool",
+                         "content": _json.dumps(result, default=str)[:4000]}
                     )
                     if name in AUTHORITATIVE_TOOLS and isinstance(result, str):
                         final_text = result
