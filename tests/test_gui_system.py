@@ -3,8 +3,7 @@
 Every reading here comes from an unprivileged source, which is a deliberate
 constraint: the panel is a network-listening web server that also runs pip,
 git and launchctl, and giving it privileges to draw a gauge would be a bad
-trade. The consequence is that temperatures are unavailable, and the tests
-below pin down that this is reported honestly rather than as a zero.
+trade.
 """
 
 import sys
@@ -72,34 +71,10 @@ def test_gpu_reports_or_admits_it_cannot():
         check("in range", 0 <= pct <= 100, str(pct))
 
 
-def test_temperatures_are_absent_not_zero():
-    """Unavailable must never be dressed up as a reading.
-
-    Apple silicon exposes thermal sensors only to root. A gauge showing 0 deg
-    would be a lie, and an empty one with no explanation just looks broken, so
-    this reports unavailable WITH the reason and the command that fixes it.
-    """
-    print("\ntemperatures say why they are missing:")
-    t = system.temperatures()
-    if t.get("available"):
-        check("a real reading has at least one sensor",
-              any(k in t for k in ("cpu", "gpu", "fan_rpm")), str(sorted(t)))
-        check("and is not stale", t.get("age_s", 0) <= system.TEMP_MAX_AGE,
-              str(t.get("age_s")))
-    else:
-        check("never reports a fake zero", "cpu" not in t and "gpu" not in t, str(sorted(t)))
-        check("says why", bool(t.get("reason")), str(t.get("reason"))[:60])
-        check("says how to fix it", bool(t.get("fix")), str(t.get("fix")))
-
-    # The sampler keeps a raw powermetrics dump for diagnosis. It is for a
-    # human reading the file, never for the browser.
-    check("the raw diagnostic dump is never served", "raw_sample" not in t)
-
-
 def test_snapshot_is_shaped_for_the_page():
     print("\nthe snapshot the status page consumes:")
     s = system.snapshot()
-    for key in ("cpu", "memory", "gpu", "temperatures"):
+    for key in ("cpu", "memory", "gpu"):
         check(f"has {key}", key in s and isinstance(s[key], dict))
     check("nothing raises", True)
 
@@ -108,7 +83,6 @@ def main():
     test_cpu_is_a_live_reading()
     test_memory_matches_the_machine()
     test_gpu_reports_or_admits_it_cannot()
-    test_temperatures_are_absent_not_zero()
     test_snapshot_is_shaped_for_the_page()
     print(f"\n{sum(PASS)}/{len(PASS)} checks passed")
     return 0 if all(PASS) else 1

@@ -106,18 +106,6 @@ SETTINGS: tuple[Setting, ...] = (
     _s("ALLOWED_CHANNEL_ID", "str", required=True, section="Discord",
        help="The text channel it listens in. Anything said there that does not "
             "start with a punctuation prefix is treated as a request."),
-    _s("DISCORD_VOICE_CHANNEL", "str", section="Discord", restart="none",
-       help="The voice channel the streaming account joins, by NAME as you "
-            "would type it into Discord's quick switcher. Used by the Join "
-            "button on the Status page. Leave blank to hide those controls."),
-    _s("DISCORD_KEYBIND_JOIN", "str", section="Discord", restart="none",
-       advanced=True,
-       help="The keybind you assigned to 'Switch To Voice Channel' in Discord "
-            "(Settings > Keybinds), written like cmd+shift+j. Discord exposes "
-            "no way to read this, so it has to be told."),
-    _s("DISCORD_KEYBIND_LEAVE", "str", section="Discord", restart="none",
-       advanced=True,
-       help="Likewise for 'Disconnect From Voice Channel', e.g. cmd+shift+k."),
     _s("STATUS_CHANNEL_ID", "str", section="Discord",
        help="Optional. A channel whose topic is kept up to date with what is "
             "playing. Needs the Manage Channels permission."),

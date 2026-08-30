@@ -4,12 +4,6 @@ Everything here is readable WITHOUT root, which is the constraint that shaped
 it. The panel runs as an ordinary LaunchAgent and asking someone to grant it
 privileges to draw a graph would be a poor trade.
 
-That constraint costs one thing: TEMPERATURES. The sensors exist —
-`ioreg -c AppleSMC` lists 62 AppleARMPMUTempSensor nodes — but they expose no
-readable values to an unprivileged process, and `powermetrics`, the documented
-way in, requires a password. There is no unprivileged path on Apple silicon.
-See `temperatures()` for what it would take.
-
 CPU is measured from the kernel's cumulative tick counters, differenced
 between calls. `top -l 2` reports the same thing but takes 1.3 seconds, which
 is far too slow for something the status page polls; a single `top -l 1`
@@ -171,47 +165,5 @@ def gpu() -> dict:
         return {"percent": None}
 
 
-TEMP_FILE = Path(__file__).resolve().parent.parent / "logs" / "temperatures.json"
-# Older than this and the sampler has stopped; a stale reading shown as current
-# is worse than none, because it looks fine while the machine cooks.
-TEMP_MAX_AGE = 120
-
-
-def temperatures() -> dict:
-    """Read what the privileged sampler wrote, if it is installed and current.
-
-    Apple silicon exposes thermal sensors only to root: powermetrics requires
-    it, and the AppleSMC / AppleARMPMUTempSensor nodes in ioreg carry no
-    readable values otherwise. The panel deliberately has no privileges, so a
-    small root LaunchDaemon samples into a file and the panel reads that.
-    Install it with `sudo scripts/install-temp-sensors.sh`.
-    """
-    if not TEMP_FILE.exists():
-        return {
-            "available": False,
-            "reason": "Apple silicon exposes thermal sensors only to root, so "
-                      "the panel cannot read them itself.",
-            "fix": "sudo scripts/install-temp-sensors.sh",
-        }
-    try:
-        data = json.loads(TEMP_FILE.read_text())
-    except (OSError, ValueError) as exc:
-        return {"available": False,
-                "reason": f"could not read the sampler's output ({type(exc).__name__})",
-                "fix": "sudo scripts/install-temp-sensors.sh"}
-
-    age = time.time() - float(data.get("updated") or 0)
-    if age > TEMP_MAX_AGE:
-        return {"available": False,
-                "reason": f"the thermal sampler last wrote {int(age)}s ago — "
-                          "it may have stopped",
-                "fix": "sudo launchctl kickstart -k system/com.athena.tempsensors"}
-
-    data.pop("raw_sample", None)      # diagnostic only; never to the browser
-    data["age_s"] = round(age)
-    return data
-
-
 def snapshot() -> dict:
-    return {"cpu": cpu(), "memory": memory(), "gpu": gpu(),
-            "temperatures": temperatures()}
+    return {"cpu": cpu(), "memory": memory(), "gpu": gpu()}
