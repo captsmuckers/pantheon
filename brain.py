@@ -2012,7 +2012,8 @@ class Brain:
                 )
                 response.raise_for_status()
                 reply = ((response.json().get("message") or {}).get("content") or "").strip()
-                reply = flavor.strip_transcript(reply)
+                reply = flavor.strip_repetition(
+                    flavor.strip_transcript(reply))
         except Exception:
             log.exception("Chat reply failed")
             return "Not now."
@@ -2025,6 +2026,10 @@ class Brain:
         # prompt asks it not to (below); this is what happens when it does
         # anyway, which is often — assistant training runs deeper than a
         # persona line.
+        # Before the sign-off strip: a reply that has looped ran out of tokens
+        # mid-phrase, so there is no pleasantry left at the end to find, and
+        # everything after the first pass is the model going round again.
+        reply = flavor.strip_repetition(reply)
         reply = flavor.strip_sign_offs(reply)
         if reply:
             self._chat_history.append({"role": "user", "content": text})

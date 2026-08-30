@@ -264,6 +264,48 @@ def test_transcript_labels_stripped():
     check("_clean drops the transcript too", cleaned == "Fine.", cleaned)
 
 
+def test_repetition_loops_are_cut():
+    """The failure that had to be interrupted by hand.
+
+    "tell me a joke" came back as the same bartender exchange six times over,
+    594 characters, done_reason 'length' — 33 seconds of speech. Sampling
+    penalties gave nothing to tune against (12 samples over four settings
+    produced no loop at all), so the guard runs after the fact instead.
+
+    The first version of this missed it entirely: it split sentences on a
+    lookbehind for [.!?], and the looping text reads
+        ... your kind here." The man says ...
+    where the character before the space is the quote, not the stop. The whole
+    reply came back as one sentence and nothing was detected. That is what this
+    first case is really testing.
+    """
+    print("\nrepetition loops are cut back to the first pass")
+    looped = (
+        'A man walks into a bar. The bartender says, "We don\u2019t serve your '
+        'kind here." The man says, "Then I\u2019ll have a beer." The bartender '
+        'says, "We don\u2019t serve your kind here." The man says, "Then '
+        'I\u2019ll have a beer." The bartender says, "We don\u2019t serve your '
+        'kind here." The man says, "Then I\u2019ll have a beer." The bartender says'
+    )
+    out = flavor.strip_repetition(looped)
+    check("the loop is cut", len(out) < len(looped) / 2,
+          f"{len(looped)} -> {len(out)} chars")
+    check("the joke itself survives", out.startswith("A man walks into a bar."))
+    check("it is told exactly once",
+          out.count("Then I\u2019ll have a beer") == 1)
+
+    print("\n  replies that merely repeat a short phrase are left alone")
+    for text in (
+        "I don't have time for jokes. If you want one, go write it yourself.",
+        "Ray. He's not here. You're not. I'm not. The lights are off.",
+        "No. No. Absolutely not.",
+        'She said, "come here." Then she left. Nobody followed.',
+        "",
+    ):
+        check(f"unchanged: {text[:34]!r}",
+              flavor.strip_repetition(text) == text.strip())
+
+
 def main():
     test_transcript_labels_stripped()
     test_attach_is_additive()
@@ -276,6 +318,7 @@ def main():
     test_repeat_suppression()
     test_flourish_is_rationed_by_code()
     test_persona_examples_stripped()
+    test_repetition_loops_are_cut()
     print(f"\n{sum(PASS)}/{len(PASS)} checks passed")
     if not all(PASS):
         sys.exit(1)

@@ -190,6 +190,60 @@ def strip_sign_offs(text: str) -> str:
     return out or (text or "").strip()
 
 
+# A sentence has to be at least this long before a repeat of it counts as a
+# loop. Short ones recur legitimately — "No." twice in a row is emphasis, not a
+# stuck model — and cutting there would truncate real replies.
+_LOOP_MIN_SENTENCE = 15
+# The closing quote matters. A lookbehind on [.!?] alone finds no boundary in
+#   ... your kind here." The man says ...
+# because the character before the space is the quote, not the stop — so the
+# whole looping reply came back as one "sentence" and the guard saw nothing.
+_SENTENCE_END = re.compile("[.!?]+[\"\u201d\u2019')\\]]*\\s+")
+
+
+def _sentences(text: str) -> list:
+    """Split on sentence ends, keeping the punctuation and any closing quote."""
+    out, start = [], 0
+    for m in _SENTENCE_END.finditer(text):
+        piece = text[start:m.end()].strip()
+        if piece:
+            out.append(piece)
+        start = m.end()
+    tail = text[start:].strip()
+    if tail:
+        out.append(tail)
+    return out
+
+
+def strip_repetition(text: str) -> str:
+    """Cut a degenerate repetition loop back to its first pass.
+
+    Small models at temperature sometimes fall into repeating a phrase until
+    they hit the token ceiling. Observed live: "tell me a joke" came back as
+    the same bartender exchange six times over, 594 characters, done_reason
+    'length' — 33 seconds of speech that had to be interrupted by hand.
+
+    Not fixed by sampling penalties, which is why this exists rather than a
+    tuned repeat_penalty: 12 samples across four penalty settings produced no
+    loop at all, so there was nothing to tune against. The failure is rare
+    enough to be untunable and bad enough to need catching, which makes an
+    after-the-fact guard the honest tool. It runs on every reply and does
+    nothing at all to one that is not looping.
+    """
+    body = (text or "").strip()
+    if not body:
+        return body
+    parts = _sentences(body)
+    seen: set[str] = set()
+    for i, part in enumerate(parts):
+        key = " ".join(part.split()).lower()
+        if len(key) >= _LOOP_MIN_SENTENCE and key in seen:
+            # Everything from here on is the loop going round again.
+            return " ".join(parts[:i]).strip() or body
+        seen.add(key)
+    return body
+
+
 def _clean(text: str, limit: int = MAX_LENGTH) -> str:
     """A tidy remark, or nothing."""
     line = strip_transcript(text).strip('"').strip("*_").strip()
