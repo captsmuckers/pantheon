@@ -132,6 +132,26 @@ def _check_resample():
         print(f"         imaging measured at {db:.1f} dB")
 
 
+
+    print("\nan acknowledgement too short to hear is rejected")
+    # "Mm." was one of the shipped lines. It rendered as 120ms of nasal hum at
+    # -18 dBFS — no consonant to define it — and reached the channel as "m" or
+    # "eh". It looks perfectly reasonable written down, which is why it was
+    # never caught by reading the list.
+    quiet = np.zeros(48000, dtype="float32")
+    t = np.arange(int(48000 * 0.12)) / 48000.0
+    quiet[:len(t)] = (np.sin(2 * np.pi * 200 * t) * 0.4).astype("float32")
+    check("120ms of speech is under the floor",
+          speech._voiced_ms(quiet, 48000) < speech.ACK_MIN_MS, True)
+
+    long_enough = np.zeros(48000, dtype="float32")
+    t2 = np.arange(int(48000 * 0.5)) / 48000.0
+    long_enough[:len(t2)] = (np.sin(2 * np.pi * 200 * t2) * 0.4).astype("float32")
+    check("500ms clears it",
+          speech._voiced_ms(long_enough, 48000) >= speech.ACK_MIN_MS, True)
+    check("silence measures as none",
+          speech._voiced_ms(np.zeros(4800, dtype="float32"), 48000), 0)
+
     print("\ncurly punctuation survives long enough to be pronounced")
     # The model writes typographic apostrophes. The emoji strip below them is
     # text.encode("ascii", "ignore"), which removed them along with the emoji,

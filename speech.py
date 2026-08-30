@@ -173,6 +173,21 @@ def _antialias_kernel(factor: int) -> "np.ndarray":
     return h
 
 
+# Below this a clip is a noise rather than a word. "Fine." is the shortest line
+# that works, at 410ms; "Mm." failed at 120ms. 300 leaves room either side.
+ACK_MIN_MS = 300
+
+
+def _voiced_ms(audio, rate: int) -> int:
+    """How much of a clip is actually speech, ignoring the silence around it."""
+    win = max(int(rate * 0.010), 1)
+    usable = audio[: len(audio) // win * win]
+    if usable.size == 0:
+        return 0
+    env = np.sqrt((usable.reshape(-1, win) ** 2).mean(axis=1))
+    return int((env > 0.01).sum() * 10)
+
+
 def normalize(audio):
     """Bring a line up to a normal speaking level, without ever clipping.
 
@@ -557,6 +572,16 @@ class Speaker:
                 mono, rate = await asyncio.to_thread(decode_wav, payload)
                 audio = await asyncio.to_thread(resample, mono, rate, self._rate)
                 audio = await asyncio.to_thread(normalize, audio)
+                # Some lines are too short to survive the trip. "Mm." rendered
+                # as 120ms of nasal hum at -18 dBFS — a tenth of a second with
+                # no consonant to define it — and came out of Discord as "m" or
+                # "eh". Long enough to look fine in a list of lines, far too
+                # short to be heard as a word.
+                voiced = _voiced_ms(audio, self._rate)
+                if voiced < ACK_MIN_MS:
+                    log.warning("Ack %r is only %dms of speech — too short to "
+                                "be heard, skipping it", line, voiced)
+                    continue
                 self._acks.append((line, np.column_stack([audio, audio])))
                 loaded += 1
             except Exception:
