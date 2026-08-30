@@ -123,6 +123,7 @@ function refresh() {
       ['bot', 'tts'].map(k => serviceCard(k, d.services[k])).join('');
     document.getElementById('probes').innerHTML = d.probes.map(probeRow).join('');
     paintSystem(d.system);
+    paintStream(d.stream);
   }).catch(() => {});
 }
 
@@ -266,3 +267,56 @@ document.addEventListener('click', e => {
 });
 
 loadUpdate(false);
+
+/* ---- the streaming account -------------------------------------------
+   Join and leave go through Discord's own global keybinds, which is the only
+   supported way to drive the desktop app: its accessibility tree is empty, and
+   automating the account's token would be self-botting and risk a ban.
+
+   Starting the stream is NOT here, because Discord has no Go Live keybind —
+   checked against the actual keybind list. So the panel reports whether a
+   stream is live, which is most of the value: you learn the stream is down
+   without opening Discord or connecting to the machine. */
+
+function streamBody(s) {
+  if (!s) return '<p class="sub">Unknown.</p>';
+  if (!s.running) {
+    return `<p class="meta"><span class="dot down"></span>Discord is not running.</p>
+      <p class="sub">It launches at startup; if it is missing, the machine may
+         not have finished logging in.</p>`;
+  }
+  const dot = s.streaming ? 'up' : s.in_voice ? 'other' : 'down';
+  const word = s.streaming ? 'Streaming' : s.in_voice ? 'In voice, not streaming' : 'Not connected';
+  let html = `<p class="meta"><span class="dot ${dot}"></span><b>${word}</b>
+      <span class="dim">· renderer ${s.peak_cpu}% · ${s.udp_sockets} media socket${s.udp_sockets === 1 ? '' : 's'}</span></p>`;
+
+  if (s.in_voice && !s.streaming) {
+    html += `<p class="note">Connected, but nothing is being streamed. Go Live
+      has to be started by hand — Discord provides no keybind for it, so it
+      cannot be automated safely.</p>`;
+  }
+  html += `<div class="actions">
+      <button id="stream-join" ${s.in_voice ? 'disabled' : ''}>Join voice</button>
+      <button id="stream-leave" ${s.in_voice ? '' : 'disabled'}>Leave</button>
+    </div>`;
+  return html;
+}
+
+function paintStream(s) {
+  const box = document.getElementById('stream-body');
+  if (box) box.innerHTML = streamBody(s);
+}
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('#stream-join, #stream-leave');
+  if (!btn) return;
+  const joining = btn.id === 'stream-join';
+  document.querySelectorAll('#stream-join, #stream-leave').forEach(b => b.disabled = true);
+  btn.textContent = joining ? 'Joining…' : 'Leaving…';
+  /* These take several seconds: the quick switcher has to open, the channel
+     has to load, and the result is then VERIFIED rather than assumed. */
+  post(joining ? '/api/stream/join' : '/api/stream/leave', {}).then(r => {
+    toast(r.data.message || (r.ok ? 'Done' : 'Failed'), r.ok ? 'good' : 'bad');
+    if (r.data.state) paintStream(r.data.state);
+  }).catch(() => {}).finally(() => setTimeout(refresh, 1500));
+});

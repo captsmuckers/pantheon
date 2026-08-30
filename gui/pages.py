@@ -50,6 +50,11 @@ def status_page() -> str:
   <p class="loading">Checking…</p>
 </section>
 
+<section class="panel" id="stream-panel">
+  <h2>Stream</h2>
+  <div id="stream-body"><p class="loading">Checking…</p></div>
+</section>
+
 <section class="panel" id="update-panel">
   <h2>Updates</h2>
   <div id="update-body"><p class="loading">Checking…</p></div>

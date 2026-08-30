@@ -60,6 +60,7 @@ from gui import envfile, logs, pages, prefs, services  # noqa: E402
 from gui import setup as setup_mod                     # noqa: E402
 from gui import updates as updates_mod                 # noqa: E402
 from gui import system as system_mod                   # noqa: E402
+from gui import discord_control as discord_mod         # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
 ENV_PATH = ROOT / ".env"
@@ -315,6 +316,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"services": services.status(),
                              "probes": services.probes(),
                              "system": system_mod.snapshot(),
+                             "stream": discord_mod.state(),
                              "root": str(ROOT)})
         elif path == "/api/settings":
             self._json(200, _settings_payload())
@@ -352,6 +354,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200 if result["ok"] else 400, result)
         elif path == "/api/update/check":
             self._json(200, updates_mod.plan())
+        elif path == "/api/stream/join":
+            result = discord_mod.join()
+            self._json(200 if result["ok"] else 400, result)
+        elif path == "/api/stream/leave":
+            result = discord_mod.leave()
+            self._json(200 if result["ok"] else 400, result)
         elif path == "/api/update/apply":
             result = updates_mod.apply()
             self._json(200 if result.get("ok") else 400, result)

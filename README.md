@@ -585,6 +585,39 @@ catch; run it. Model choice matters more than prompt wording here.
 
 ---
 
+## Starting the stream after a reboot
+
+If people watch through a screen share, a reboot that brings everything back
+still shows nobody anything until the streaming account rejoins its voice
+channel. The Status page has **Join voice** and **Leave** for that, which need
+three settings under Discord:
+
+| | |
+|---|---|
+| `DISCORD_VOICE_CHANNEL` | the channel by name, as you would type it into Discord's quick switcher |
+| `DISCORD_KEYBIND_JOIN` | the keybind you assign to **Switch To Voice Channel** |
+| `DISCORD_KEYBIND_LEAVE` | likewise for **Disconnect From Voice Channel** |
+
+Assign those two in **Discord → Settings → Keybinds**, then write them here as
+e.g. `cmd+shift+j`. Discord exposes no way to read them back, so it has to be
+told.
+
+Both actions are **verified afterwards** rather than assumed — a keystroke that
+goes nowhere looks exactly like one that worked, and not having to go and check
+is the whole point.
+
+**Starting the stream itself cannot be automated, and that is not an
+oversight.** Discord has no Go Live keybind; Go Live is absent from the bot API
+entirely; and Discord's accessibility tree is empty, so there is no button to
+press programmatically. The remaining option would be automating the account's
+own token, which is self-botting — against Discord's terms, with the account
+itself as the stake. A test asserts this code contains no HTTP client and opens
+no connection, so that shortcut fails the build rather than shipping.
+
+What the panel does instead is **report whether a stream is live**, which is
+most of the remaining value: you learn it is down without opening Discord or
+connecting to the machine.
+
 ## What the Status page shows
 
 Alongside the services, it reports **CPU, memory and GPU** — sampled without
