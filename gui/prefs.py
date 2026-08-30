@@ -69,6 +69,12 @@ DEFAULTS = {
     "remote_access": False,   # bind beyond loopback. Requires a password.
     "password": None,         # {"salt": hex, "hash": hex}
     "theme": "dark",
+    # Paths, not uploaded blobs. A private key posted through a web form
+    # crosses the network — possibly over plain HTTP, since TLS is what you are
+    # trying to set up — and is then written by the web server itself. Pointing
+    # at a file the operator placed avoids both.
+    "tls_cert": None,
+    "tls_key": None,
 }
 
 
@@ -152,3 +158,68 @@ def bind_host(prefs: dict) -> str:
     if prefs.get("remote_access") and has_password(prefs):
         return "0.0.0.0"
     return "127.0.0.1"
+
+
+def tls_paths(prefs: dict):
+    """(cert, key) if both are configured and readable, else None."""
+    cert, key = prefs.get("tls_cert"), prefs.get("tls_key")
+    if not cert or not key:
+        return None
+    cert, key = Path(cert).expanduser(), Path(key).expanduser()
+    if not cert.is_file() or not key.is_file():
+        return None
+    return cert, key
+
+
+def tls_context(prefs: dict):
+    """An SSLContext, or (None, reason). Never raises the server out of life.
+
+    The certificate is loaded HERE rather than at bind time so a bad path or a
+    mismatched key is a message instead of a panel that will not start — which
+    would be the worst possible failure, since the panel is how you would fix
+    it.
+    """
+    import ssl
+    paths = tls_paths(prefs)
+    if paths is None:
+        return None, "not configured"
+    cert, key = paths
+    try:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+        # TLS 1.2 floor: everything below it is deprecated, and nothing that
+        # would connect to this panel needs it.
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        return ctx, "ok"
+    except Exception as exc:
+        return None, f"{type(exc).__name__}: {exc}"
+
+
+def describe_cert(prefs: dict) -> dict:
+    """What the configured certificate actually is, for the settings page."""
+    paths = tls_paths(prefs)
+    if paths is None:
+        cert, key = prefs.get("tls_cert"), prefs.get("tls_key")
+        if not cert and not key:
+            return {"configured": False}
+        return {"configured": True, "valid": False,
+                "error": "one of the files is missing or unreadable",
+                "cert": cert, "key": key}
+    cert, key = paths
+    ctx, why = tls_context(prefs)
+    info = {"configured": True, "valid": ctx is not None,
+            "cert": str(cert), "key": str(key)}
+    if ctx is None:
+        info["error"] = why
+        return info
+    try:
+        import ssl
+        data = ssl._ssl._test_decode_cert(str(cert))
+        info["subject"] = dict(x[0] for x in data.get("subject", ()))\
+            .get("commonName")
+        info["expires"] = data.get("notAfter")
+        names = [v for k, v in data.get("subjectAltName", ()) if k == "DNS"]
+        info["names"] = names
+    except Exception:
+        pass
+    return info

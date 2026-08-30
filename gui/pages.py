@@ -148,6 +148,53 @@ def security_page() -> str:
 </section>
 
 <section class="panel">
+  <h3>HTTPS</h3>
+  <p class="sub">Serve the panel over TLS directly, without a reverse proxy in
+     front. Point at a certificate and key already on this machine — paths, not
+     uploads: a private key posted through a web form crosses the network,
+     possibly over plain HTTP since TLS is the thing being set up, and is then
+     written by the web server itself.</p>
+  <div id="tls-state" class="state"></div>
+  <form id="tls-form" autocomplete="off">
+    <div class="field">
+      <label for="tls-cert">Certificate (fullchain.pem)</label>
+      <input type="text" id="tls-cert" spellcheck="false"
+             placeholder="/etc/letsencrypt/live/example.com/fullchain.pem">
+    </div>
+    <div class="field">
+      <label for="tls-key">Private key (privkey.pem)</label>
+      <input type="text" id="tls-key" spellcheck="false"
+             placeholder="/etc/letsencrypt/live/example.com/privkey.pem">
+      <p class="help">The panel must be able to read both. Leave both blank to
+         turn TLS off. A certificate that will not load is refused here rather
+         than saved — otherwise the panel would fall back to plain HTTP on
+         every restart with the reason buried in a log.</p>
+    </div>
+    <button type="submit" class="primary">Save certificate</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h3>Behind a reverse proxy</h3>
+  <p class="sub">The panel refuses requests carrying a hostname it does not
+     answer to — that is what stops a page on the internet pointing its own
+     domain at this machine and driving the panel through your browser. A
+     reverse proxy forwards its own hostname, so that name has to be allowed
+     here or every request comes back <b>421</b>.</p>
+  <form id="hosts-form" autocomplete="off">
+    <div class="field">
+      <label for="extra-hosts">Extra hostnames</label>
+      <input type="text" id="extra-hosts" spellcheck="false"
+             placeholder="pantheon.example.com">
+      <p class="help">Hostnames only — no <code>https://</code>, no port, no
+         path. Separate several with commas.</p>
+    </div>
+    <button type="submit" class="primary">Save hostnames</button>
+  </form>
+  <div id="known-hosts" class="note-sm"></div>
+</section>
+
+<section class="panel">
   <h3>Remote access</h3>
   <p class="sub">Off: reachable only from this machine. On: reachable from your
      network, which means this page — and the token fields on it — are exposed

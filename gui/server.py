@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import re
 import os
 import secrets as _secrets
 import socket
@@ -181,6 +182,31 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, AttributeError):
             return {}
 
+    def _forwarded_https(self) -> bool:
+        """Did this request reach the proxy over HTTPS?
+
+        Only consulted to decide whether the session cookie may carry Secure.
+        NOT used for access control: X-Forwarded-* headers are trivially forged
+        by anything that can reach the port directly, so trusting them to
+        authorise anything would undo the Host check entirely.
+
+        Marking the cookie Secure when the browser did arrive over HTTPS is
+        strictly better — it stops the session being replayed over plain HTTP —
+        and marking it Secure when it did NOT would break the login loop
+        silently, because the browser would refuse to send it back.
+        """
+        if getattr(self.server, "tls", False):
+            return True
+        proto = (self.headers.get("X-Forwarded-Proto") or "").lower()
+        return proto.split(",")[0].strip() == "https"
+
+    def _session_cookie(self, token: str) -> str:
+        parts = [f"athena_session={token}", "Path=/", "HttpOnly",
+                 "SameSite=Strict", f"Max-Age={SESSION_LIFETIME}"]
+        if self._forwarded_https():
+            parts.append("Secure")
+        return "; ".join(parts)
+
     def _cookies(self) -> dict:
         out = {}
         for part in (self.headers.get("Cookie") or "").split(";"):
@@ -211,11 +237,17 @@ class Handler(BaseHTTPRequestHandler):
         # it points here. That is precisely the rebinding attack — the
         # attacker's domain really does resolve to this machine. Only names
         # this machine calls itself are accepted, collected once at startup.
+        # An explicit allowlist applies whatever the remote-access setting is.
+        # It used to be checked only when remote access was on, which meant a
+        # reverse proxy on this same machine — a perfectly ordinary setup —
+        # got 421 no matter what was configured.
+        extra = {str(h).lower() for h in
+                 (self.server.prefs.get("extra_hosts") or [])}
+        if host.lower() in extra:
+            return True
+
         if self.server.prefs.get("remote_access"):
-            extra = {str(h).lower() for h in
-                     (self.server.prefs.get("extra_hosts") or [])}
-            return (host.lower() in _local_names() or host.lower() in extra
-                    or _is_ip_literal(host))
+            return host.lower() in _local_names() or _is_ip_literal(host)
         return False
 
     def _authed(self) -> bool:
@@ -395,9 +427,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(401, {"ok": False, "error": "Wrong password."})
             return
         token = _new_session()
-        self._json(200, {"ok": True}, {
-            "Set-Cookie": f"athena_session={token}; Path=/; HttpOnly; "
-                          f"SameSite=Strict; Max-Age={SESSION_LIFETIME}"})
+        self._json(200, {"ok": True},
+                   {"Set-Cookie": self._session_cookie(token)})
 
     def _preview(self, body: dict):
         """Speak a line with an unsaved voice, so it can be judged before saving."""
@@ -453,13 +484,52 @@ class Handler(BaseHTTPRequestHandler):
                 # Keep whoever just set it signed in, rather than locking them
                 # out of the page they are standing on.
                 token = _new_session()
-                extra["Set-Cookie"] = (
-                    f"athena_session={token}; Path=/; HttpOnly; "
-                    f"SameSite=Strict; Max-Age={SESSION_LIFETIME}")
+                extra["Set-Cookie"] = self._session_cookie(token)
                 message.append("Password set — you are signed in on this browser.")
             else:
                 message.append("Password removed, and remote access turned off "
                                "with it.")
+
+        if "tls_cert" in body or "tls_key" in body:
+            cert = str(body.get("tls_cert") or "").strip()
+            key = str(body.get("tls_key") or "").strip()
+            if not cert and not key:
+                p["tls_cert"] = p["tls_key"] = None
+                message.append("TLS turned off — restart the panel to apply.")
+            else:
+                trial = dict(p, tls_cert=cert, tls_key=key)
+                # Validated before it is saved. Storing a certificate that does
+                # not load would leave the panel falling back to HTTP on every
+                # restart with the reason only in its log.
+                ctx, why = prefs.tls_context(trial)
+                if ctx is None:
+                    return 400, {"ok": False,
+                                 "error": f"That certificate will not load — {why}"}, {}
+                p["tls_cert"], p["tls_key"] = cert, key
+                message.append("Certificate accepted — restart the panel to "
+                               "serve HTTPS.")
+
+        if "extra_hosts" in body:
+            raw = body.get("extra_hosts")
+            if isinstance(raw, str):
+                raw = re.split(r"[,\s]+", raw)
+            hosts = []
+            for h in (raw or []):
+                h = str(h).strip().lower().rstrip(".")
+                # A hostname only. Anything with a scheme, path or port is a
+                # sign somebody pasted a URL, and silently accepting it would
+                # produce an allowlist entry that never matches a Host header.
+                if not h:
+                    continue
+                if "/" in h or ":" in h:
+                    return 400, {"ok": False,
+                                 "error": f"{h!r} should be just a hostname — "
+                                          "no https://, no port, no path."}, {}
+                hosts.append(h)
+            p["extra_hosts"] = sorted(set(hosts))
+            message.append(f"{len(hosts)} extra hostname"
+                           f"{'' if len(hosts) == 1 else 's'} allowed."
+                           if hosts else "Extra hostnames cleared.")
 
         if "remote_access" in body:
             want = bool(body["remote_access"])
@@ -541,7 +611,10 @@ def _is_ip_literal(host: str) -> bool:
 def _security_state(p: dict) -> dict:
     return {"has_password": prefs.has_password(p),
             "remote_access": bool(p.get("remote_access")),
-            "bind": prefs.bind_host(p), "port": p.get("port")}
+            "bind": prefs.bind_host(p), "port": p.get("port"),
+            "extra_hosts": list(p.get("extra_hosts") or []),
+            "known_hosts": sorted(_local_names()),
+            "tls": prefs.describe_cert(p)}
 
 
 # ---------------------------------------------------------------------- settings
@@ -672,7 +745,22 @@ def serve(port: int = None, host: str = None) -> None:
     httpd = ThreadingHTTPServer((host, port), Handler)
     httpd.prefs = p
 
-    where = f"http://127.0.0.1:{port}"
+    # TLS, if a usable certificate is configured. A broken one must never stop
+    # the panel starting: this is the tool you would use to fix the setting,
+    # so it falls back to plain HTTP and says why, loudly.
+    scheme = "http"
+    ctx, why = prefs.tls_context(p)
+    if ctx is not None:
+        httpd.socket = ctx.wrap_socket(httpd.socket, server_side=True)
+        httpd.tls = True
+        scheme = "https"
+    else:
+        httpd.tls = False
+        if why != "not configured":
+            print(f"  TLS is configured but unusable — {why}")
+            print("  serving plain HTTP instead; fix it on the Security page")
+
+    where = f"{scheme}://127.0.0.1:{port}"
     print(f"Athena control panel  {where}")
     print(f"  checkout   {ROOT}")
     print(f"  listening  {host}:{port}"

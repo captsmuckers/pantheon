@@ -418,6 +418,82 @@ def test_setting_a_password_keeps_you_signed_in(p):
         fresh.close()
 
 
+def test_reverse_proxy_and_tls(p):
+    """Behind a proxy, and serving TLS directly.
+
+    The Host allowlist is what stops a page on the internet pointing its own
+    domain at this machine. A reverse proxy forwards its OWN hostname, so that
+    name has to be allowed explicitly — the allowlist cannot infer it, and
+    inferring it would defeat the check.
+    """
+    print("\na reverse proxy's hostname has to be allowed explicitly:")
+    hdr = {"X-Pantheon-CSRF": "1"}
+    # Its own panel: this has to run against one with no password, and the
+    # remote-access test deliberately leaves one set. Borrowing that state made
+    # every call here 401 — which looks like the bug under test and is not.
+    p = Panel()
+    code, _, _ = request(p.port, "/", host="pantheon.example.com")
+    check("an unknown proxy domain is refused", code == 421, str(code))
+
+    code, text, _ = request(p.port, "/api/security", "POST",
+                            {"extra_hosts": "pantheon.example.com"}, hdr)
+    check("it can be allowed", code == 200, text[:70])
+
+    code, _, _ = request(p.port, "/", host="pantheon.example.com")
+    check("and is then accepted", code != 421, str(code))
+
+    # The allowlist used to be consulted only when remote access was on, so a
+    # proxy on this same machine got 421 no matter what was configured.
+    state = json.loads(request(p.port, "/api/security")[1])
+    check("it applies regardless of the remote-access setting",
+          not state["remote_access"] and code != 421,
+          f"remote_access={state['remote_access']} code={code}")
+
+    code, _, _ = request(p.port, "/", host="evil.example")
+    check("an attacker's domain is still refused", code == 421, str(code))
+
+    print("\na pasted URL is refused rather than silently stored:")
+    for bad in ("https://pantheon.example.com", "pantheon.example.com:8086",
+                "pantheon.example.com/panel"):
+        code, text, _ = request(p.port, "/api/security", "POST",
+                                {"extra_hosts": bad}, hdr)
+        check(f"{bad!r} refused", code == 400, str(code))
+
+    print("\na certificate is validated before it is saved:")
+    code, text, _ = request(p.port, "/api/security", "POST",
+                            {"tls_cert": "/nope/cert.pem",
+                             "tls_key": "/nope/key.pem"}, hdr)
+    body = json.loads(text)
+    check("a missing certificate is refused", code == 400, str(code))
+    check("and says why", "will not load" in body.get("error", ""),
+          body.get("error", "")[:60])
+    state = json.loads(request(p.port, "/api/security")[1])
+    check("nothing was stored", not state["tls"]["configured"], str(state["tls"]))
+
+    print("\nthe session cookie is Secure when the browser used HTTPS:")
+    code, _, headers = request(p.port, "/api/security", "POST",
+                               {"password": "a-long-enough-password"},
+                               {**hdr, "X-Forwarded-Proto": "https"})
+    cookie = headers.get("Set-Cookie", "")
+    check("Secure is set behind a TLS proxy", "Secure" in cookie, cookie[:70])
+    # And must NOT be, over plain HTTP — the browser would refuse to send it
+    # back, which looks like a login that silently never works.
+    # And must NOT be set over plain HTTP: a Secure cookie is never sent back
+    # over a plaintext connection, so marking it unconditionally would produce
+    # a login that appears to succeed and then silently never holds.
+    plain = Panel()
+    try:
+        _, _, h2 = request(plain.port, "/api/security", "POST",
+                           {"password": "a-long-enough-password"}, hdr)
+        cookie2 = h2.get("Set-Cookie", "")
+        check("a cookie is issued over plain HTTP too", "athena_session=" in cookie2,
+              cookie2[:50])
+        check("but without Secure", "Secure" not in cookie2, cookie2[:70])
+    finally:
+        plain.close()
+    p.close()
+
+
 def test_prefs_file_permissions(p):
     print("\nthe file holding the password hash is not world-readable:")
     prefs = Path(p.dir) / ".athena-gui.json"
@@ -447,6 +523,7 @@ def main():
         test_a_refused_post_does_not_break_the_connection(p)
         test_remote_access_needs_a_password(p)
         test_setting_a_password_keeps_you_signed_in(p)
+        test_reverse_proxy_and_tls(p)
         test_prefs_file_permissions(p)
     finally:
         p.close()

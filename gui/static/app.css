@@ -289,3 +289,4 @@ body.filtering .section-head .count { display: none; }
 .gauge-fill.warm { background: var(--warn); }
 .gauge-fill.hot { background: var(--bad); }
 .gauge-detail { font-size: 12px; color: var(--dim); }
+.err-inline { color: var(--bad); }
