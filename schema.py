@@ -482,6 +482,19 @@ SETTINGS: tuple[Setting, ...] = (
        help="How long to wait for one image. Sized for the hardware, not for "
             "patience: SDXL on an 8GB card takes tens of seconds, a quantised "
             "FLUX with offloading takes minutes."),
+    _s("IMAGE_DENOISE", "float", default=0.65, lo=0.1, hi=1.0, section="Images",
+       restart="bot",
+       help="How far an edit may travel from the picture it started with. 1.0 "
+            "discards the original entirely; below about 0.4 the prompt has no "
+            "room to change anything. 0.65 restyles while keeping the "
+            "composition. A local change that must leave the rest of the frame "
+            "alone needs inpainting, not a lower number here."),
+    _s("IMAGE_WORKFLOW_IMG2IMG", "str",
+       default="workflows/sdxl-img2img.json", section="Images",
+       restart="bot", advanced=True,
+       help="Used instead of the workflow below when a picture is attached to "
+            "the request. Needs a LoadImage node; the source image sets the "
+            "size, so IMAGE_WIDTH/HEIGHT do not apply."),
     _s("IMAGE_WORKFLOW", "str", default="workflows/sdxl.json", section="Images",
        restart="bot", advanced=True,
        help="A ComfyUI graph in API format — not the format the editor saves "

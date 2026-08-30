@@ -759,3 +759,13 @@ IMAGE_HEIGHT = _int("IMAGE_HEIGHT", 1024) or 1024
 IMAGE_NEGATIVE = os.getenv(
     "IMAGE_NEGATIVE", "blurry, low quality, watermark, text, deformed"
 ).strip()
+# Used instead of IMAGE_WORKFLOW when a picture comes with the request. The
+# source image is what sets the size here, so IMAGE_WIDTH/HEIGHT do not apply.
+IMAGE_WORKFLOW_IMG2IMG = os.getenv(
+    "IMAGE_WORKFLOW_IMG2IMG", "workflows/sdxl-img2img.json").strip()
+# How far an edit may travel from the picture it started with. 1.0 discards the
+# original entirely; below about 0.4 the prompt has no room to change anything.
+# 0.65 restyles while keeping the composition, which is what "make this guy
+# into Superman" means. Local edits that must not touch the rest of the frame
+# — "give him corn rows" — need inpainting, not a lower number here.
+IMAGE_DENOISE = _float("IMAGE_DENOISE", 0.65)

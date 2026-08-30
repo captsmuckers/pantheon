@@ -14,6 +14,7 @@ disappointment; losing the bot is an outage.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import copy
 import json
 import logging
@@ -24,6 +25,23 @@ from pathlib import Path
 import config
 
 log = logging.getLogger("athena.imagegen")
+
+# The image arrives on the Discord message, but the prompt arrives from the
+# model several layers down, and the tool-call signature in between is the
+# model's to write. A ContextVar carries it across without every function on
+# the path growing a parameter it does not use — and unlike a module global it
+# is per-task, so two people posting pictures at once cannot swap references.
+_reference: contextvars.ContextVar = contextvars.ContextVar(
+    "athena_reference_image", default=None)
+
+
+def set_reference(data: bytes | None, filename: str = "input.png") -> None:
+    """Hand the next generation a picture to work from. None clears it."""
+    _reference.set((data, filename) if data else None)
+
+
+def has_reference() -> bool:
+    return _reference.get() is not None
 
 # ComfyUI hands back a job id and does the work in the background, so the only
 # way to know an image is ready is to ask repeatedly. Half a second is short
@@ -60,7 +78,7 @@ class Picture:
 
 def _patch(graph: dict, *, prompt: str, negative: str, seed: int,
            steps: int, cfg: float, width: int, height: int,
-           checkpoint: str) -> dict:
+           checkpoint: str, image: str = "", denoise: float = 0.0) -> dict:
     """Fill a ComfyUI API graph in, by structure rather than by node id.
 
     Workflows are exported as {node_id: {class_type, inputs}} and the ids are
@@ -103,6 +121,19 @@ def _patch(graph: dict, *, prompt: str, negative: str, seed: int,
         graph[key]["inputs"]["width"] = width
         graph[key]["inputs"]["height"] = height
 
+    if image:
+        # The uploaded name, as the server chose to store it. LoadImage is what
+        # every img2img, ControlNet and inpainting graph reads its input from,
+        # so patching it here covers all three without special cases.
+        for key in nodes_of("LoadImage", "LoadImageMask"):
+            graph[key]["inputs"]["image"] = image
+
+    if denoise and "denoise" in sampler:
+        # How far to travel from the source. 1.0 ignores it completely; too low
+        # and the prompt has no room to change anything. Only set on the
+        # img2img path — a text-to-image graph must keep its own 1.0.
+        sampler["denoise"] = denoise
+
     if checkpoint:
         for key in nodes_of("CheckpointLoaderSimple", "UNETLoader"):
             inputs = graph[key]["inputs"]
@@ -113,11 +144,31 @@ def _patch(graph: dict, *, prompt: str, negative: str, seed: int,
     return graph
 
 
-def _load_workflow() -> dict:
-    path = Path(config.IMAGE_WORKFLOW)
+def _load_workflow(name: str = "") -> dict:
+    path = Path(name or config.IMAGE_WORKFLOW)
     if not path.is_absolute():
         path = Path(__file__).resolve().parent / path
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+async def _upload(client, base: str, data: bytes, filename: str) -> str:
+    """Put a picture on the server and return the name it stored it under.
+
+    ComfyUI renames on collision, so the name it answers with is the only one
+    LoadImage will find — using the name we sent silently loads whatever was
+    already there under that name, which looks like the wrong picture being
+    edited rather than an upload problem.
+    """
+    posted = await client.post(
+        f"{base}/upload/image",
+        files={"image": (filename, data, "application/octet-stream")},
+        data={"overwrite": "false"},
+    )
+    posted.raise_for_status()
+    body = posted.json()
+    stored = body.get("name") or ""
+    folder = body.get("subfolder") or ""
+    return f"{folder}/{stored}" if folder else stored
 
 
 async def generate(prompt: str, *, negative: str = "", seed: int | None = None,
@@ -131,22 +182,36 @@ async def generate(prompt: str, *, negative: str = "", seed: int | None = None,
     if not config.IMAGE_ENABLED:
         return "Image generation is switched off."
 
-    graph = _patch(
-        _load_workflow(),
-        prompt=prompt,
-        negative=negative or config.IMAGE_NEGATIVE,
-        seed=random.randint(0, 2**31 - 1) if seed is None else seed,
-        steps=config.IMAGE_STEPS,
-        cfg=config.IMAGE_CFG,
-        width=width or config.IMAGE_WIDTH,
-        height=height or config.IMAGE_HEIGHT,
-        checkpoint=config.IMAGE_CHECKPOINT,
-    )
-
     base = config.IMAGE_URL.rstrip("/")
     started = time.monotonic()
+    reference = _reference.get()
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
+            # A picture came with the request, so this is an edit, not a fresh
+            # image: send it over first, then run the graph that starts from it.
+            stored, denoise = "", 0.0
+            if reference:
+                data, filename = reference
+                stored = await _upload(client, base, data, filename)
+                if not stored:
+                    return "I couldn't send that picture to the image server."
+                denoise = config.IMAGE_DENOISE
+                log.info("working from %s (%.0f KB)", stored, len(data) / 1024)
+
+            graph = _patch(
+                _load_workflow(
+                    config.IMAGE_WORKFLOW_IMG2IMG if stored else ""),
+                prompt=prompt,
+                negative=negative or config.IMAGE_NEGATIVE,
+                seed=random.randint(0, 2**31 - 1) if seed is None else seed,
+                steps=config.IMAGE_STEPS,
+                cfg=config.IMAGE_CFG,
+                width=width or config.IMAGE_WIDTH,
+                height=height or config.IMAGE_HEIGHT,
+                checkpoint=config.IMAGE_CHECKPOINT,
+                image=stored,
+                denoise=denoise,
+            )
             queued = await client.post(f"{base}/prompt", json={"prompt": graph})
             queued.raise_for_status()
             accepted = queued.json()

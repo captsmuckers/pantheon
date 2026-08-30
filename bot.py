@@ -577,6 +577,11 @@ async def on_ready():
             _started = False
 
 
+# Discord allows more than this, but a reference is going over the LAN to be
+# VAE-encoded on an 8GB card; a 25MB phone photo is all cost and no benefit.
+MAX_REFERENCE_BYTES = 12 * 1024 * 1024
+
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -594,6 +599,34 @@ async def on_message(message: discord.Message):
     if brain is None:
         await message.reply("Still starting up, give me a second.", mention_author=False)
         return
+
+    # A picture posted with the message is something to work FROM, not
+    # decoration. It has to be picked up here because the model never sees the
+    # message — it only writes the prompt — so the bytes travel out of band.
+    # Always set, including to None: leaving a previous reference in place
+    # would silently edit the last picture somebody posted.
+    picture = next((a for a in message.attachments
+                    if (a.content_type or "").startswith("image/")), None)
+    if picture is not None and config.IMAGE_ENABLED:
+        if picture.size > MAX_REFERENCE_BYTES:
+            imagegen.set_reference(None)
+            await message.reply(
+                f"That picture is {picture.size / 1024**2:.0f}MB — too big to "
+                "work from. Under "
+                f"{MAX_REFERENCE_BYTES // 1024**2}MB, please.",
+                mention_author=False)
+            return
+        try:
+            imagegen.set_reference(await picture.read(), picture.filename)
+            log.info("   with reference %s (%.0f KB)",
+                     picture.filename, picture.size / 1024)
+        except Exception:
+            # Not fatal: fall through and treat it as an ordinary request
+            # rather than refusing the message outright.
+            log.warning("Could not read the attached picture", exc_info=True)
+            imagegen.set_reference(None)
+    else:
+        imagegen.set_reference(None)
 
     log.info("<- %s: %r", message.author.display_name, text[:120])
     try:

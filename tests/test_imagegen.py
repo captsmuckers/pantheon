@@ -115,6 +115,7 @@ class _StubComfy(BaseHTTPRequestHandler):
 
     polls = 0
     fail = False
+    uploaded = b""
     reject = False       # 200 with node_errors — a rejected workflow
     empty = False        # finishes successfully but produces no image
 
@@ -130,7 +131,13 @@ class _StubComfy(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if urlparse(self.path).path == "/upload/image":
+            _StubComfy.uploaded = body
+            # ComfyUI renames on collision, so it deliberately answers with a
+            # DIFFERENT name than was sent — the client must use this one.
+            return self._json({"name": "leopard (1).png", "subfolder": "",
+                               "type": "input"})
         if _StubComfy.reject:
             # Observed: a rejected workflow is still 200 WITH a prompt_id.
             return self._json({
@@ -301,12 +308,76 @@ def test_an_image_request_reaches_the_tool():
               bool(brain._DRAW_REQUEST.match(text)), False)
 
 
+def test_an_attached_picture_is_worked_from():
+    print("\na reference picture is uploaded and edited, not ignored")
+    if not Path("workflows/sdxl-img2img.json").exists():
+        # cwd-independent
+        pass
+    root = Path(__file__).resolve().parent.parent
+    img2img = json.loads(
+        (root / "workflows/sdxl-img2img.json").read_text(encoding="utf-8"))
+    kinds = {v["class_type"] for v in img2img.values()}
+    check("the img2img workflow loads an image", "LoadImage" in kinds, True)
+    check("and encodes it to latent", "VAEEncode" in kinds, True)
+
+    out = imagegen._patch(
+        img2img, prompt="a bronze statue", negative="", seed=1, steps=20,
+        cfg=7.0, width=1024, height=1024, checkpoint="",
+        image="leopard (1).png", denoise=0.65)
+    load = next(v for v in out.values() if v["class_type"] == "LoadImage")
+    check("the uploaded name reaches LoadImage",
+          load["inputs"]["image"], "leopard (1).png")
+    sampler = next(v for v in out.values() if v["class_type"] == "KSampler")
+    check("denoise is applied", sampler["inputs"]["denoise"], 0.65)
+
+    print("\n  and a text-to-image run keeps its own denoise of 1.0")
+    plain = imagegen._patch(
+        json.loads((root / "workflows/sdxl.json").read_text(encoding="utf-8")),
+        prompt="a fox", negative="", seed=1, steps=20, cfg=7.0,
+        width=1024, height=1024, checkpoint="")
+    ks = next(v for v in plain.values() if v["class_type"] == "KSampler")
+    check("untouched without a reference", ks["inputs"]["denoise"], 1.0)
+
+    print("\n  end to end against the stub")
+    _StubComfy.polls, _StubComfy.fail = 0, False
+    _StubComfy.reject = _StubComfy.empty = False
+    _StubComfy.uploaded = b""
+    was_wf = config.IMAGE_WORKFLOW_IMG2IMG
+    config.IMAGE_WORKFLOW_IMG2IMG = str(root / "workflows/sdxl-img2img.json")
+    imagegen.set_reference(b"PRETEND-PNG-BYTES", "leopard.png")
+    result = _with_stub(lambda: asyncio.run(imagegen.generate("a bronze statue")))
+    imagegen.set_reference(None)
+    config.IMAGE_WORKFLOW_IMG2IMG = was_wf
+    check("returns a Picture", isinstance(result, imagegen.Picture), True)
+    check("the reference bytes actually reached the server",
+          b"PRETEND-PNG-BYTES" in _StubComfy.uploaded, True)
+
+    print("\n  the reference does not leak into the next request")
+    check("cleared", imagegen.has_reference(), False)
+
+
+def test_edit_phrasings_route_to_the_tool():
+    print("\nwith a picture attached, an edit request reaches the tool")
+    import brain
+    for text in ("make this guy into superman", "give this guy corn rolls",
+                 "turn him into a viking", "can you make this black and white",
+                 "add a cape to this", "remove the background"):
+        check(f"edit: {text!r}", bool(brain._EDIT_REQUEST.match(text)), True)
+
+    print("\n  but posting a picture and chatting is still conversation")
+    for text in ("lol", "check this out", "who is this", "nice", "what is that"):
+        check(f"not an edit: {text!r}",
+              bool(brain._EDIT_REQUEST.match(text)), False)
+
+
 for fn in (test_the_shipped_workflow_is_usable,
            test_patch_follows_links_not_node_ids,
            test_a_whole_generation,
            test_nothing_reaches_the_bot_as_an_exception,
            test_the_two_failures_that_used_to_hang,
-           test_an_image_request_reaches_the_tool):
+           test_an_image_request_reaches_the_tool,
+           test_an_attached_picture_is_worked_from,
+           test_edit_phrasings_route_to_the_tool):
     fn()
 
 print(f"\n{sum(PASS)}/{len(PASS)} checks passed")

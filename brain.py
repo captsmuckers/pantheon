@@ -332,6 +332,21 @@ _DRAW_REQUEST = re.compile(
     re.I,
 )
 
+# When a picture is attached, the bar for "this is an image request" drops: the
+# picture itself is most of the evidence. "make this guy into Superman" names no
+# image noun at all, so _DRAW_REQUEST rightly ignores it — but with a photo
+# attached it can hardly mean anything else.
+#
+# Still a verb list rather than "any message with an attachment", because
+# posting a picture and saying "lol" is the common case and must stay
+# conversation.
+_EDIT_REQUEST = re.compile(
+    r"^(?:athena[\s,]+)?(?:please\s+|can\s+you\s+|could\s+you\s+)?"
+    r"(?:make|turn|change|convert|restyle|redraw|give|put|add|remove|replace"
+    r"|draw|paint|edit|fix|swap|dress|age|colou?r)\b",
+    re.I,
+)
+
 _CHAT_REQUEST = re.compile(
     r"^(?:"
     r"(?:tell|write|give|make|say)\s+(?:\w+\s+)?(?:a|an|another|some)?\s*"
@@ -1141,8 +1156,11 @@ TOOLS = [
             "asks you to draw, generate, make or imagine an image. Write a "
             "full descriptive prompt rather than repeating their words back — "
             "'a red fox asleep on a mossy log, morning light, shallow depth of "
-            "field' works, 'fox' does not. It takes up to a few minutes and "
-            "posts the image itself, so do not describe what you drew."
+            "field' works, 'fox' does not. If they attached a picture you "
+            "are EDITING it: describe the finished result, including the parts "
+            "that stay the same, rather than writing an instruction like 'add "
+            "a cape'. It takes up to a few minutes and posts the image itself, "
+            "so do not describe what you drew."
         ),
         "input_schema": {
             "type": "object",
@@ -1620,7 +1638,11 @@ class Brain:
         # fox" is four words with no media word in it, which is exactly the
         # shape that rule is looking for. Gated on the feature being on, so
         # nothing about routing changes while there is no image server.
-        drawing = config.IMAGE_ENABLED and bool(_DRAW_REQUEST.match(text))
+        import imagegen
+        drawing = config.IMAGE_ENABLED and (
+            bool(_DRAW_REQUEST.match(text))
+            or (imagegen.has_reference() and bool(_EDIT_REQUEST.match(text)))
+        )
         if drawing:
             log.info("intent: MEDIA (image request) — %r", text[:60])
 
