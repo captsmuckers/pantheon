@@ -118,7 +118,98 @@ def _check_resample():
     check("same rate is a passthrough", len(same), 2400)
 
 
-for fn in (_check_sanitize, _check_suppression, _check_resample):
+class _FakeStream:
+    """Records what was asked of it, in order. Nothing reaches a device."""
+
+    def __init__(self):
+        self.written = 0
+        self.calls = []
+
+    def write(self, data):
+        self.calls.append("write")
+        self.written += len(data)
+
+    def abort(self):
+        self.calls.append("abort")
+
+    def start(self):
+        self.calls.append("start")
+
+
+def _bare_speaker():
+    """A Speaker with no event loop, no device and no TTS service behind it."""
+    import asyncio
+    import threading
+
+    sp = speech.Speaker.__new__(speech.Speaker)
+    sp._stream = _FakeStream()
+    sp._rate = 48000
+    sp._interrupt = threading.Event()
+    sp._speaking = threading.Event()
+    sp._queue = asyncio.Queue()
+    return sp
+
+
+def _check_interrupt():
+    print("\ncutting a line short without racing the writer")
+    if not speech.AUDIO_AVAILABLE:
+        print("  skip (numpy not installed on this interpreter)")
+        return
+    import numpy as np
+
+    one_second = np.zeros((48000, 2), dtype="float32")
+
+    # A line nobody interrupts must play whole and leave the stream alone.
+    sp = _bare_speaker()
+    check("an uninterrupted line reports done", sp._play(one_second), True)
+    check("every frame is written", sp._stream.written, 48000)
+    check("a finished line is never aborted", "abort" in sp._stream.calls, False)
+
+    # Flag already up: not a single frame should reach the device.
+    sp = _bare_speaker()
+    sp._interrupt.set()
+    check("an interrupted line reports cut short", sp._play(one_second), False)
+    check("no audio is written after the cut", sp._stream.written, 0)
+    check("the buffered tail is dropped, then the stream is usable again",
+          sp._stream.calls, ["abort", "start"])
+
+    # Flag raised mid-line: it must stop partway, not play to the end.
+    sp = _bare_speaker()
+    stream = sp._stream
+    real_write = stream.write
+
+    def cut_after_three(data):
+        real_write(data)
+        if stream.calls.count("write") >= 3:
+            sp._interrupt.set()
+
+    stream.write = cut_after_three
+    check("a line cut partway reports cut short", sp._play(one_second), False)
+    check("it stops well short of the whole line",
+          stream.written < 48000 and stream.written > 0, True)
+    check("and still leaves the stream started", stream.calls[-2:],
+          ["abort", "start"])
+
+    # The regression that started this: abort() from the caller's thread while
+    # the worker was inside a blocking write raised PortAudioError -9986 and
+    # killed the line instead of ending it.
+    sp = _bare_speaker()
+    sp._speaking.set()
+    sp.silence()
+    check("silence() never touches the stream while a writer owns it",
+          sp._stream.calls, [])
+    check("it raises the flag instead", sp._interrupt.is_set(), True)
+
+    # With nobody writing there is no race, so it may abort directly.
+    sp = _bare_speaker()
+    sp._speaking.clear()
+    sp.silence()
+    check("with no writer it drops the buffer itself",
+          sp._stream.calls, ["abort", "start"])
+
+
+for fn in (_check_sanitize, _check_suppression, _check_resample,
+           _check_interrupt):
     fn()
 
 print()

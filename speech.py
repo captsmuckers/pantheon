@@ -183,6 +183,11 @@ class Speaker:
     # merely being heard twice on the stream.
     EXCLUSIVE_TRIES = 1
 
+    # How often the writer thread looks up to see whether it has been cut off.
+    # Small enough that "shut up" feels immediate, large enough that the write
+    # loop is still one buffer copy per block rather than per sample.
+    INTERRUPT_POLL_S = 0.05
+
     def __init__(self, *, loop=None):
         if not AUDIO_AVAILABLE:
             raise RuntimeError("speech needs numpy and sounddevice; neither is here")
@@ -195,6 +200,9 @@ class Speaker:
         # threading.Event, not asyncio: voice.py reads this from PortAudio's
         # callback thread, which has no event loop.
         self._speaking = threading.Event()
+        # Raised by silence() to cut the current line short. The worker thread
+        # owns every call on the stream; see _play for why that matters.
+        self._interrupt = threading.Event()
         self.stats = {"spoken": 0, "failed": 0, "dropped": 0}
         # Pre-rendered acknowledgements: [(line, stereo float array)], already
         # resampled to the device rate so playing one is a buffer write.
@@ -310,8 +318,8 @@ class Speaker:
         """Cut her off now and drop anything queued behind it.
 
         Without this a long reply plays to the end with no way to interrupt it,
-        talking over the room. Callable from any thread — sd.stop() acts on the
-        stream the worker opened, and the queue drain is a non-blocking loop.
+        talking over the room. Callable from any thread: the queue drain is a
+        non-blocking loop and the stream itself is left to the worker.
 
         Returns how many queued replies were discarded, so the caller can say
         something truthful about what just happened.
@@ -324,14 +332,21 @@ class Speaker:
                 dropped += 1
             except asyncio.QueueEmpty:
                 break
-        try:
-            # abort() discards what is already buffered in the device; stop()
-            # would politely play it out, which is the opposite of the ask.
-            if self._stream is not None:
-                self._stream.abort()
-                self._stream.start()
-        except Exception:
-            log.debug("Nothing to stop", exc_info=True)
+        # Aborting from here used to race the worker's blocking write and
+        # raise PortAudioError -9986 out of the middle of a sentence, killing
+        # the line instead of ending it. PortAudio will not have abort() and
+        # write() overlap, so the flag goes up and the writer cuts itself off.
+        self._interrupt.set()
+        if not self._speaking.is_set():
+            try:
+                # Nobody is writing, so this thread may safely drop whatever
+                # the device still holds. stop() would politely play it out,
+                # which is the opposite of the ask.
+                if self._stream is not None:
+                    self._stream.abort()
+                    self._stream.start()
+            except Exception:
+                log.debug("Nothing to stop", exc_info=True)
         self._speaking.clear()
         return dropped
 
@@ -384,11 +399,13 @@ class Speaker:
         audio = await asyncio.to_thread(resample, mono, rate, self._rate)
         stereo = np.column_stack([audio, audio])
 
+        self._interrupt.clear()
         self._speaking.set()
         try:
-            await asyncio.to_thread(self._play, stereo)
+            done = await asyncio.to_thread(self._play, stereo)
             self.stats["spoken"] += 1
-            log.info("spoke %.1fs: %r", len(audio) / self._rate, text[:70])
+            log.info("%s %.1fs: %r", "spoke" if done else "cut short",
+                     len(audio) / self._rate, text[:70])
         finally:
             # Held briefly past the end of playback: the tail is still moving
             # through Discord's encoder and someone else's open mic can echo it
@@ -471,6 +488,7 @@ class Speaker:
         choices = [a for a in self._acks if a[0] != self._last_ack] or self._acks
         line, stereo = random.choice(choices)
         self._last_ack = line
+        self._interrupt.clear()
         self._speaking.set()
         try:
             await asyncio.to_thread(self._play, stereo)
@@ -480,9 +498,28 @@ class Speaker:
             await asyncio.sleep(config.TTS_ECHO_GUARD_MS / 1000)
             self._speaking.clear()
 
-    def _play(self, stereo) -> None:
-        """Blocking write into the long-lived stream. Runs in a worker thread."""
-        self._stream.write(np.ascontiguousarray(stereo, dtype="float32"))
+    def _play(self, stereo) -> bool:
+        """Blocking write into the long-lived stream. Runs in a worker thread.
+
+        Written a block at a time rather than in one call so that silence() can
+        cut in without touching the stream from another thread: abort() landing
+        while this write was in flight raised PortAudioError -9986 and took the
+        line with it. The writer therefore owns every stream call, and silence()
+        only raises a flag.
+
+        Returns True if the whole line played, False if it was cut short.
+        """
+        data = np.ascontiguousarray(stereo, dtype="float32")
+        block = max(int(self._rate * self.INTERRUPT_POLL_S), 1)
+        for start in range(0, len(data), block):
+            if self._interrupt.is_set():
+                # Drop what the device has already buffered, then leave the
+                # stream running so the next line need not reopen it.
+                self._stream.abort()
+                self._stream.start()
+                return False
+            self._stream.write(data[start:start + block])
+        return True
 
     def _resolve_device(self) -> int:
         """Confirm the cached index still names the device we resolved.
