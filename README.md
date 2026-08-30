@@ -453,6 +453,31 @@ It also refuses requests carrying a hostname it does not answer to, which is
 what stops a page on the internet pointing its own domain at `127.0.0.1` and
 driving the panel through your browser. Reach it as `127.0.0.1`.
 
+**Behind a reverse proxy** — Nginx Proxy Manager, Caddy, Traefik — that check
+is the first thing you will hit. The proxy forwards its *own* hostname, which
+the panel has never heard of, so every request comes back **421**. Add the
+domain under **Security → Behind a reverse proxy**. The allowlist cannot infer
+it, because inferring it is precisely the attack the check exists to stop.
+
+**HTTPS without a proxy** is under **Security → HTTPS**: point at a certificate
+and key already on the machine.
+
+Paths, not uploads — deliberately. A private key posted through a web form
+crosses the network, possibly over plain HTTP since TLS is the thing being set
+up, and is then written by the web server itself.
+
+A certificate that will not load is refused when you save it rather than
+stored, because the alternative is a panel falling back to plain HTTP on every
+restart with the reason buried in a log — and the panel is the tool you would
+use to fix that.
+
+The session cookie gains `Secure` whenever the browser arrived over TLS, either
+directly or through a proxy's `X-Forwarded-Proto`, and deliberately not
+otherwise: a `Secure` cookie is never sent back over plaintext, so setting it
+unconditionally would produce a login that appears to work and then silently
+never holds. That header decides only this, never access control — anything
+that can reach the port can forge it.
+
 ---
 
 ## Running it
