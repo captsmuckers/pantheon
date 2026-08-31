@@ -551,6 +551,53 @@ def test_the_turn_outlasts_the_image_it_is_waiting_for():
               bot_mod.REPLY_TIMEOUT > 0, True)
 
 
+def test_the_direct_commands_take_the_prompt_verbatim():
+    """/draw and /edit exist so the typed words are the prompt.
+
+    In conversation the language model rewrites the request before ComfyUI
+    sees it — "a spooky alien" arrived as ninety characters of scene
+    description. Usually an improvement, but it means you never control the
+    prompt, cannot use CLIP's 77-token window deliberately, and are subject to
+    the model's opinion of the request rather than the image server's.
+    """
+    print("\nthe direct commands bypass the language model")
+    import ast
+
+    src = (Path(__file__).resolve().parent.parent / "bot.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+    found = {}
+    for node in tree.body:
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        for dec in node.decorator_list:
+            if not isinstance(dec, ast.Call):
+                continue
+            for kw in dec.keywords:
+                if (kw.arg == "name" and isinstance(kw.value, ast.Constant)
+                        and kw.value.value in ("draw", "edit")):
+                    found[kw.value.value] = node
+
+    check("/draw exists", "draw" in found, True)
+    check("/edit exists", "edit" in found, True)
+    if not found:
+        return
+
+    for name, node in found.items():
+        dumped = ast.dump(node)
+        args = [a.arg for a in node.args.args]
+        check(f"/{name} defers before working", "defer" in dumped, True)
+        check(f"/{name} is channel-guarded", "_guard" in dumped, True)
+        check(f"/{name} takes a prompt", "prompt" in args, True)
+        # The whole point: no model between the words and the image server.
+        for banned in ("chat_only", "_ask_ollama"):
+            check(f"/{name} does not call {banned}", banned in dumped, False)
+
+    check("/edit takes an attachment", "picture" in
+          [a.arg for a in found["edit"].args.args], True)
+    check("/edit clears the reference afterwards",
+          "set_reference" in ast.dump(found["edit"]), True)
+
+
 for fn in (test_the_shipped_workflow_is_usable,
            test_patch_follows_links_not_node_ids,
            test_a_whole_generation,
@@ -563,7 +610,8 @@ for fn in (test_the_shipped_workflow_is_usable,
            test_the_caption_is_read_but_not_spoken,
            test_the_phrasings_that_reached_her_as_refusals,
            test_a_reference_is_scaled_before_it_is_encoded,
-           test_the_turn_outlasts_the_image_it_is_waiting_for):
+           test_the_turn_outlasts_the_image_it_is_waiting_for,
+           test_the_direct_commands_take_the_prompt_verbatim):
     fn()
 
 print(f"\n{sum(PASS)}/{len(PASS)} checks passed")

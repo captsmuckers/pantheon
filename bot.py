@@ -703,6 +703,16 @@ async def _followup(interaction: discord.Interaction, result) -> None:
             result.text(), view=view, wait=True
         )
         return
+    if isinstance(result, imagegen.Picture):
+        # Same reason as _send_result: a fresh file object per send, because a
+        # consumed one uploads as an empty attachment.
+        import io as _io
+
+        await interaction.followup.send(
+            result.text()[:1900],
+            file=discord.File(_io.BytesIO(result.data), filename=result.filename),
+        )
+        return
     await interaction.followup.send(str(result)[:1900])
 
 
@@ -734,6 +744,63 @@ async def slash_status(interaction: discord.Interaction):
         return
     await interaction.response.defer()
     await interaction.followup.send(await brain.controls.fast("status"))
+
+
+@bot.tree.command(
+    name="draw",
+    description="Generate an image from exactly this prompt — no rewriting",
+)
+async def slash_draw(interaction: discord.Interaction, prompt: str):
+    """The prompt goes to the image server verbatim.
+
+    Deliberately no language model in the path. Asked in conversation she
+    writes the prompt herself, which is usually an improvement — "a spooky
+    alien" became ninety characters of scene description — but it means the
+    words that reach the diffusion model are never the ones that were typed.
+    This is the way to say exactly what you want, and the way to use the whole
+    of CLIP's 77-token window on your own terms rather than hers.
+    """
+    if not await _guard(interaction):
+        return
+    # Generation runs to tens of seconds; Discord abandons an interaction that
+    # has not answered in three.
+    await interaction.response.defer()
+    imagegen.set_reference(None)
+    await _followup(interaction, await imagegen.generate(prompt))
+
+
+@bot.tree.command(
+    name="edit",
+    description="Change an attached picture using exactly this prompt",
+)
+async def slash_edit(interaction: discord.Interaction, prompt: str,
+                     picture: discord.Attachment):
+    """Same as /draw, starting from a picture instead of from nothing."""
+    if not await _guard(interaction):
+        return
+    if not (picture.content_type or "").startswith("image/"):
+        await interaction.response.send_message(
+            f"That is a {picture.content_type or 'unknown file'}, not an image.",
+            ephemeral=True)
+        return
+    if picture.size > MAX_REFERENCE_BYTES:
+        await interaction.response.send_message(
+            f"That picture is {picture.size / 1024**2:.0f}MB — too big to work "
+            f"from. Under {MAX_REFERENCE_BYTES // 1024**2}MB, please.",
+            ephemeral=True)
+        return
+    await interaction.response.defer()
+    try:
+        imagegen.set_reference(await picture.read(), picture.filename)
+    except Exception:
+        log.warning("Could not read the attached picture", exc_info=True)
+        await interaction.followup.send("I couldn't read that picture.")
+        return
+    try:
+        await _followup(interaction, await imagegen.generate(prompt))
+    finally:
+        # Cleared whatever happened: this task's reference must not outlive it.
+        imagegen.set_reference(None)
 
 
 @bot.tree.command(name="pause", description="Pause playback")
