@@ -540,7 +540,26 @@ async def _start_services() -> None:
 
     try:
         synced = await bot.tree.sync()
-        log.info("Synced %d slash commands", len(synced))
+        log.info("Synced %d slash commands globally", len(synced))
+        # ...and again to the one guild we serve, because a GLOBAL sync can
+        # take up to an hour to reach clients. Until it does, a newly added
+        # command does not exist as far as Discord is concerned: typing it
+        # sends "/draw ..." as an ordinary message, which on_message then
+        # ignores for starting with a slash, and the whole thing looks broken
+        # while the log cheerfully reports a successful sync. A guild sync is
+        # immediate, and a guild command shadows the global one of the same
+        # name rather than duplicating it.
+        channel = bot.get_channel(config.ALLOWED_CHANNEL_ID)
+        guild = getattr(channel, "guild", None) or (
+            bot.guilds[0] if bot.guilds else None)
+        if guild is not None:
+            bot.tree.copy_global_to(guild=guild)
+            here = await bot.tree.sync(guild=guild)
+            log.info("Synced %d slash commands to %s — usable immediately",
+                     len(here), guild.name)
+        else:
+            log.warning("No guild to sync to; new slash commands may take "
+                        "up to an hour to appear")
     except Exception:
         log.exception("Slash command sync failed")
 
