@@ -475,6 +475,82 @@ def test_the_caption_is_read_but_not_spoken():
           "anime" in pic.spoken().lower(), False)
 
 
+def test_the_phrasings_that_reached_her_as_refusals():
+    """Live failures: three requests she could have served, answered in
+    character instead.
+
+        "make a photo of darth vader..."            -> CHAT, refused
+        "make a realistic photo of darth vader..."  -> CHAT, refused
+        "remake this image to be pacifico johnson"  -> CHAT, refused
+
+    while "make a picture of a spooky alien" worked. Three gaps: "photo" was
+    not an image noun, no adjective was allowed between the article and the
+    noun, and "remake"/"redo" were not verbs. Falling through to the classifier
+    means CHAT, and CHAT has no tools — so she answers in character with no way
+    to act, which reads as refusing something she can do perfectly well.
+    """
+    print("\nphrasings that must reach the image tool")
+    import brain
+    for text in ("make a photo of darth vader sleeping with a mexican guy",
+                 "make a realistic photo of darth vader sleeping",
+                 "remake this image to be pacifico johnson",
+                 "redo the picture", "create a dark moody wallpaper",
+                 "make me a nice portrait",
+                 "make a picture of a spooky alien."):
+        check(f"reaches the tool: {text[:44]!r}",
+              bool(brain._DRAW_REQUEST.match(text)), True)
+
+    print("\n  and phrasings that must NOT be hijacked into drawing")
+    for text in ("play Dune", "make it louder", "make me a sandwich",
+                 "pause the movie", "turn it up", "make the volume louder",
+                 "tell me a joke", "write me a poem", "can you draw?"):
+        check(f"left alone: {text!r}",
+              bool(brain._DRAW_REQUEST.match(text)), False)
+
+
+def test_a_reference_is_scaled_before_it_is_encoded():
+    """A 6.7MB reference pushed one edit past the turn ceiling.
+
+    Nothing scaled it, so ComfyUI VAE-encoded a phone photo at its own
+    resolution on an 8GB card. The edit that succeeded came from a 1985KB
+    source and took 22.6s; the 6743KB one was abandoned at 120s. Scaling
+    happens on the GPU machine because the bot has no image library, and
+    should not grow one to shrink a picture.
+    """
+    print("\nthe reference is scaled down before the VAE sees it")
+    root = Path(__file__).resolve().parent.parent
+    g = json.loads((root / "workflows/sdxl-img2img.json").read_text(encoding="utf-8"))
+    kinds = {v["class_type"] for v in g.values()}
+    check("there is a scaling node", "ImageScaleToTotalPixels" in kinds, True)
+
+    scaler = next(k for k, v in g.items()
+                  if v["class_type"] == "ImageScaleToTotalPixels")
+    loader = next(k for k, v in g.items() if v["class_type"] == "LoadImage")
+    encoder = next(v for v in g.values() if v["class_type"] == "VAEEncode")
+    check("it reads the loaded image", g[scaler]["inputs"]["image"][0], loader)
+    check("and the encoder reads the SCALED one, not the original",
+          encoder["inputs"]["pixels"][0], scaler)
+    check("about one megapixel, which is what SDXL wants",
+          g[scaler]["inputs"]["megapixels"], 1.0)
+
+
+def test_the_turn_outlasts_the_image_it_is_waiting_for():
+    """Two ceilings that disagreed, and the wrong one won.
+
+    imagegen waited IMAGE_TIMEOUT (300s) while bot.py abandoned the whole turn
+    at REPLY_TIMEOUT (120s), so a slow edit was killed with the GPU still
+    working and the finished image landed nowhere.
+    """
+    print("\nthe turn ceiling outlasts the image ceiling")
+    import bot as bot_mod
+    if config.IMAGE_ENABLED:
+        check("a turn may run longer than an image may take",
+              bot_mod.REPLY_TIMEOUT > config.IMAGE_TIMEOUT, True)
+    else:
+        check("images off, so the turn ceiling stands alone",
+              bot_mod.REPLY_TIMEOUT > 0, True)
+
+
 for fn in (test_the_shipped_workflow_is_usable,
            test_patch_follows_links_not_node_ids,
            test_a_whole_generation,
@@ -484,7 +560,10 @@ for fn in (test_the_shipped_workflow_is_usable,
            test_an_attached_picture_is_worked_from,
            test_edit_phrasings_route_to_the_tool,
            test_a_generated_image_survives_the_tool_loop,
-           test_the_caption_is_read_but_not_spoken):
+           test_the_caption_is_read_but_not_spoken,
+           test_the_phrasings_that_reached_her_as_refusals,
+           test_a_reference_is_scaled_before_it_is_encoded,
+           test_the_turn_outlasts_the_image_it_is_waiting_for):
     fn()
 
 print(f"\n{sum(PASS)}/{len(PASS)} checks passed")

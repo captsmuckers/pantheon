@@ -56,7 +56,16 @@ _started = False
 # Longest a single chat request may take before we answer with an apology
 # instead of nothing. Generous: a tool-calling round trip on a local model can
 # legitimately take a while.
-REPLY_TIMEOUT = 120
+# A turn is abandoned after this. It has to outlast anything a turn can
+# legitimately do, and the slowest of those is an image: imagegen waits
+# IMAGE_TIMEOUT for one, so a shorter ceiling here kills the turn while the GPU
+# is still working and throws away a picture that then finishes into nothing.
+# Observed: an edit from a 6.7MB reference was abandoned at 120s having never
+# been delivered. Derived rather than written down twice, so the two cannot
+# drift apart again.
+REPLY_TIMEOUT = (
+    int(config.IMAGE_TIMEOUT) + 30 if config.IMAGE_ENABLED else 120
+)
 
 
 # ----------------------------------------------------------------------

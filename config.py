@@ -746,7 +746,7 @@ IMAGE_URL = os.getenv("IMAGE_URL", "http://127.0.0.1:8188").strip()
 # Generous, because it is sized for the hardware rather than for patience: an
 # 8GB card doing SDXL at 1024x1024 takes tens of seconds, and a quantised FLUX
 # with offloading takes minutes.
-IMAGE_TIMEOUT = _float("IMAGE_TIMEOUT", 300.0)
+IMAGE_TIMEOUT = _float("IMAGE_TIMEOUT", 180.0)
 # A ComfyUI graph in API format. Relative paths resolve next to this file.
 IMAGE_WORKFLOW = os.getenv("IMAGE_WORKFLOW", "workflows/sdxl.json").strip()
 # Blank keeps whatever the workflow was exported with, which is the right

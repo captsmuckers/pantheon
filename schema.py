@@ -465,7 +465,7 @@ SETTINGS: tuple[Setting, ...] = (
        restart="bot", advanced=True,
        help="How hard the sampler is pushed toward the prompt. Above about 12 "
             "images start to look burnt."),
-    _s("IMAGE_TIMEOUT", "float", default=300.0, lo=30, hi=1800,
+    _s("IMAGE_TIMEOUT", "float", default=180.0, lo=30, hi=1800,
        section="Images", restart="bot", advanced=True,
        help="How long to wait for one image. Sized for the hardware, not for "
             "patience: SDXL on an 8GB card takes tens of seconds, a quantised "

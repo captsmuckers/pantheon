@@ -322,12 +322,24 @@ _STREAM_STATUS = re.compile(
 # need no noun. "make" and "create" need one, or "make me a sandwich" becomes a
 # generation request. A leading "can you" is left alone deliberately: that is a
 # question about her abilities, and belongs in conversation.
+# The nouns that mean "a thing to look at". "photo" was missing from the first
+# version, so "make a photo of darth vader" fell through to the classifier,
+# came back CHAT, and she answered in character with no tool to reach for —
+# which reads as her refusing to do something she is perfectly able to do.
+_IMAGE_NOUN = (r"(?:pic(?:ture)?|image|photo(?:graph)?|drawing|painting"
+               r"|artwork|art|render|portrait|wallpaper|selfie|meme)s?")
+
 _DRAW_REQUEST = re.compile(
     r"^(?:athena[\s,]+)?(?:please\s+)?"
     r"(?:"
     r"(?:draw|paint|sketch|illustrate)\s+\S"
-    r"|(?:make|generate|create|render|imagine)\s+(?:me\s+)?(?:a|an|some)?\s*"
-    r"(?:picture|image|drawing|painting|artwork|art)\b"
+    # (?:re)? so that "remake" and "redo" count, which they did not before.
+    r"|(?:re)?(?:make|generate|create|render|do|imagine)\s+"
+    r"(?:me\s+)?(?:a|an|the|some|this|that|another)?\s*"
+    # Adjectives. "a realistic photo" failed a pattern that expected the noun
+    # immediately after the article.
+    r"(?:\w+[\s-]+){0,3}"
+    + _IMAGE_NOUN + r"\b"
     r")",
     re.I,
 )
@@ -342,8 +354,9 @@ _DRAW_REQUEST = re.compile(
 # conversation.
 _EDIT_REQUEST = re.compile(
     r"^(?:athena[\s,]+)?(?:please\s+|can\s+you\s+|could\s+you\s+)?"
-    r"(?:make|turn|change|convert|restyle|redraw|give|put|add|remove|replace"
-    r"|draw|paint|edit|fix|swap|dress|age|colou?r)\b",
+    r"(?:re)?(?:make|draw|do|style|paint|touch)\b"
+    r"|(?:turn|change|convert|restyle|give|put|add|remove|replace"
+    r"|edit|fix|swap|dress|age|colou?r)\b",
     re.I,
 )
 
