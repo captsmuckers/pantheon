@@ -60,3 +60,6 @@ bakeoff-round*.json
 
 # Rendered acknowledgement clips — generated on first start, not source.
 tts/acks/
+
+# Machine-specific notes for Claude — addresses, hosts, identifiers.
+CLAUDE.local.md

@@ -411,6 +411,62 @@ It must run in your logged-in GUI session — window control needs a real login
 session, so a LaunchAgent is fine and a LaunchDaemon is not. Closing the lid
 with no external display stops everything.
 
+### 11. Image generation (optional)
+
+She can draw. Generation runs on **another machine** over HTTP, the same shape
+as the speech server: this one is a client and nothing heavy happens locally.
+
+That is not squeamishness about load. On a Mac the GPU is already carrying
+Whisper and Kokoro, and diffusion on top of that starves the CoreAudio
+callbacks her voice depends on — you get choppy speech to buy slow images.
+
+**On the other machine:** install [ComfyUI](https://github.com/comfyanonymous/ComfyUI),
+put an SDXL checkpoint in `models/checkpoints/`, and start it bound to the LAN:
+
+```bash
+python main.py --listen <that machine's LAN IP> --port 8188
+```
+
+It binds `127.0.0.1` by default, so without `--listen` nothing else can reach
+it. Pin the GPU explicitly if the machine has more than one — by **UUID** from
+`nvidia-smi -L`, not by index, because `nvidia-smi` orders by PCI bus while
+CUDA does not, and the two disagreeing puts generation on the wrong card:
+
+```bash
+CUDA_VISIBLE_DEVICES=GPU-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+```
+
+**Security, before you open the port.** ComfyUI has **no authentication**, and
+it loads custom nodes, which is arbitrary code execution as whoever runs it.
+Anything that can reach 8188 can run code on that machine. Firewall it to your
+own subnet, and never port-forward it.
+
+**Here:** set `IMAGE_URL` to `http://<that machine>:8188`, set
+`IMAGE_CHECKPOINT` to the filename exactly as ComfyUI reports it in
+`/object_info/CheckpointLoaderSimple`, and turn on `IMAGE_ENABLED`.
+
+Then either ask her — *"make a picture of a fox asleep on a log"*, or attach a
+photo and say *"make this more dramatic"* — or use the slash commands:
+
+| | |
+|---|---|
+| `/draw <prompt>` | your exact words, no model rewriting them |
+| `/edit <prompt> + attachment` | the same, starting from a picture |
+
+Asked in conversation she writes the prompt herself, which is usually better —
+"a spooky alien" becomes a full scene description. The slash commands exist for
+when you want the prompt to be precisely what you typed, and to spend CLIP's
+77-token window deliberately.
+
+**Choose the checkpoint carefully.** `sd_xl_base_1.0` is the research baseline
+and is measurably the worst of the common options for anatomy and object
+coherence — it will hand you swords with two hilts and hands gripping the
+blade. A community fine-tune (RealVisXL, Juggernaut XL) is the same size, the
+same speed, drop-in, and fixes most of it. Settings tuning is worth perhaps
+15% next to that.
+
+`workflows/README.md` covers using your own ComfyUI graph.
+
 ---
 
 ## The control panel
@@ -610,39 +666,6 @@ catch; run it. Model choice matters more than prompt wording here.
 
 ---
 
-## Starting the stream after a reboot
-
-If people watch through a screen share, a reboot that brings everything back
-still shows nobody anything until the streaming account rejoins its voice
-channel. The Status page has **Join voice** and **Leave** for that, which need
-three settings under Discord:
-
-| | |
-|---|---|
-| `DISCORD_VOICE_CHANNEL` | the channel by name, as you would type it into Discord's quick switcher |
-| `DISCORD_KEYBIND_JOIN` | the keybind you assign to **Switch To Voice Channel** |
-| `DISCORD_KEYBIND_LEAVE` | likewise for **Disconnect From Voice Channel** |
-
-Assign those two in **Discord → Settings → Keybinds**, then write them here as
-e.g. `cmd+shift+j`. Discord exposes no way to read them back, so it has to be
-told.
-
-Both actions are **verified afterwards** rather than assumed — a keystroke that
-goes nowhere looks exactly like one that worked, and not having to go and check
-is the whole point.
-
-**Starting the stream itself cannot be automated, and that is not an
-oversight.** Discord has no Go Live keybind; Go Live is absent from the bot API
-entirely; and Discord's accessibility tree is empty, so there is no button to
-press programmatically. The remaining option would be automating the account's
-own token, which is self-botting — against Discord's terms, with the account
-itself as the stake. A test asserts this code contains no HTTP client and opens
-no connection, so that shortcut fails the build rather than shipping.
-
-What the panel does instead is **report whether a stream is live**, which is
-most of the remaining value: you learn it is down without opening Discord or
-connecting to the machine.
-
 ## What the Status page shows
 
 Alongside the services, it reports **CPU, memory and GPU** — sampled without
@@ -665,21 +688,6 @@ decode run on the media engine — separate silicon — so a screen share can be
 encoding three streams while this reads 0%. That is correct, not a fault. The
 media engine exposes no unprivileged counter at all; `AppleAVD` publishes only
 a power state.
-
-**Temperatures are not shown by default.** Apple silicon exposes thermal
-sensors only to root: `powermetrics` requires it, and the ioreg sensor nodes
-carry no readable values otherwise. Rather than give the panel privileges,
-there is an opt-in root helper that samples into a file the panel reads:
-
-```bash
-sudo scripts/install-temp-sensors.sh              # install
-sudo scripts/install-temp-sensors.sh --uninstall  # remove
-```
-
-It has no network, no input and no arguments, and it also picks up GPU power
-and frequency — the closest available measure of the media-engine work the
-cores figure misses. Without it the page says temperatures are unavailable and
-why, rather than showing a zero.
 
 ## Keeping it up to date
 

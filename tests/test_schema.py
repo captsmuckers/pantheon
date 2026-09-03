@@ -203,12 +203,42 @@ def test_restart_targets_name_the_process_that_reads_it():
           "; ".join(f"{n} says restart={r!r}" for n, r in wrong))
 
 
+def test_the_example_env_is_not_stale():
+    """.env.example is generated, and drifted 23 settings behind anyway.
+
+    It carries a "do not edit by hand, run scripts/gen-env-example.py" header,
+    which is exactly the sort of instruction that gets skipped when a setting
+    is added in the middle of doing something else. Every IMAGE_* setting was
+    missing, so a fresh clone had no way to discover that image generation
+    exists, let alone configure it.
+
+    Regenerating is one command. Nothing here fixes it automatically, because
+    a test that quietly rewrites a tracked file hides the drift rather than
+    reporting it.
+    """
+    print("\nthe example .env documents every setting")
+    example = Path(__file__).resolve().parent.parent / ".env.example"
+    if not example.exists():
+        check("there is an .env.example at all", False,
+              "a fresh clone cannot be configured without one")
+        return
+    text = example.read_text(encoding="utf-8")
+    documented = set(re.findall(r"^#?\s*([A-Z][A-Z0-9_]+)=", text, re.M))
+    missing = sorted(s.name for s in schema.SETTINGS
+                     if s.name not in documented)
+    check(f"all {len(schema.SETTINGS)} settings appear", not missing,
+          ("run scripts/gen-env-example.py — missing: "
+           + ", ".join(missing[:6]) + ("..." if len(missing) > 6 else ""))
+          if missing else "")
+
+
 def main():
     test_no_phantom_controls()
     test_nothing_undescribed_by_accident()
     test_every_setting_is_usable()
     test_secrets_are_marked()
     test_restart_targets_name_the_process_that_reads_it()
+    test_the_example_env_is_not_stale()
     print(f"\n{sum(PASS)}/{len(PASS)} checks passed")
     return 0 if all(PASS) else 1
 
