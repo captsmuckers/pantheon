@@ -234,20 +234,32 @@ from the **Status** page and talk to it in the channel.
 
 ### 5. macOS permissions
 
-The bot moves mpv and Spotify windows around. Two **separate** grants, in
-**System Settings → Privacy & Security**:
+Three **separate** grants, in **System Settings → Privacy & Security**. All
+three fail *silently*, which is why they are worth granting deliberately
+rather than waiting to be asked.
 
-- **Accessibility** — add whatever runs the bot (Terminal, iTerm, or the Python
-  binary itself). Without it every window call fails and the bot reports it
-  cannot find windows that are plainly on screen.
-- **Automation** — for controlling Spotify. Requested the first time the bot
-  tries; if you dismiss that dialog it is never asked again and must be
-  re-enabled by hand.
+- **Microphone** — voice input opens a capture stream, and macOS counts a
+  virtual audio device as a microphone just like a real one. Without it the
+  stream opens happily and returns silence, so she simply never wakes and
+  nothing in the log says why. Needed even though no physical mic is involved.
+- **Accessibility** — window control goes through System Events. Without it
+  every window call fails and she reports being unable to find windows that
+  are plainly on screen.
+- **Automation** — one grant per app she drives (Spotify, Discord, System
+  Events). Requested the first time each is touched; **dismiss that dialog and
+  it is never asked again**, and has to be re-enabled by hand.
 
-Both fail *silently*, which is why they are worth granting deliberately. The
-setup page checks Accessibility and will tell you if it is missing.
+Grant these to **the binary that actually runs**, not to the venv. A venv's
+`python` re-execs into the framework interpreter, so the process macOS sees is
+`/opt/homebrew/.../Python.app/Contents/MacOS/Python`. Granting the venv symlink
+looks right and does nothing. Running once from Terminal is the easy way to
+make the dialogs appear against the right binary; a LaunchAgent that starts at
+login cannot show you a prompt you are not there to answer.
 
-Screen Recording is a third grant and belongs to Discord, not to the bot.
+The setup page checks Accessibility and will tell you if it is missing.
+
+Screen Recording is a fourth grant and belongs to **Discord**, not to the bot —
+it is what lets the screen share see the desktop.
 
 ---
 
