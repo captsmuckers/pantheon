@@ -255,11 +255,54 @@ SETTINGS: tuple[Setting, ...] = (
     # -- Speech output ------------------------------------------------
     _s("TTS_ENABLED", "bool", default=False, section="Speech", restart="bot",
        help="Whether she speaks her replies into the voice channel."),
-    _s("TTS_ENGINE", "choice", default="kokoro", choices=("kokoro", "chatterbox"),
+    _s("TTS_ENGINE", "choice", default="kokoro",
+       choices=("kokoro", "chatterbox", "qwen"),
        section="Speech", restart="tts",
        help="kokoro is ~0.2s a reply and mispronounces proper nouns. chatterbox "
             "reads them correctly and takes ~8s, holding ~200% CPU while it "
-            "does, which can break playback up on a loaded machine."),
+            "does, which can break playback up on a loaded machine. qwen runs "
+            "on MLX at ~1.9s a reply, clones a voice from a clip, and is the "
+            "only engine with built-in timbres and a describe-it-in-words mode "
+            "- see TTS_QWEN_MODEL. Each engine has its own venv."),
+    # The checkpoint doubles as the mode switch because Qwen publishes Base,
+    # CustomVoice and VoiceDesign as separate weights - you cannot flip between
+    # them without loading a different model, so a separate mode setting could
+    # only ever disagree with this one.
+    # A dropdown, not a text box: this is the mode switch, it is the one Qwen
+    # setting you actually change, and a mistyped repo id fails ~30s later
+    # inside a model download rather than at save time. An id set by hand in
+    # .env still shows, as "not a listed choice".
+    _s("TTS_QWEN_MODEL", "choice",
+       default="mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+       choices=(
+           "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit",
+           "mlx-community/Qwen3-TTS-12Hz-0.6B-CustomVoice-8bit",
+           "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
+           "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+           "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+       ),
+       section="Speech", restart="tts",
+       help="qwen only. The repo name picks the mode: ...-CustomVoice-... uses "
+            "the 9 built-in timbres via TTS_VOICE (Vivian, Serena, Uncle_Fu, "
+            "Dylan, Eric, Ryan, Aiden, Ono_Anna, Sohee - only Ryan and Aiden "
+            "are natively English). ...-VoiceDesign-... uses TTS_VOICE_DESIGN. "
+            "...-Base-... clones TTS_VOICE_REF. 0.6B is ~20% faster than 1.7B; "
+            "1.7B scores better. 8bit and bf16 measured the same."),
+    # The bot, not the speech service: it sends the description on every
+    # synthesize call, exactly as it does the voice name. That keeps a voice
+    # change off the ~30s Qwen checkpoint reload — the weights are the same
+    # whatever you describe.
+    _s("TTS_VOICE_DESIGN", "str", default="", section="Speech", restart="bot",
+       help="qwen VoiceDesign only: the voice described in words, e.g. \"a low, "
+            "dry, aristocratic English woman, bored and faintly contemptuous\". "
+            "Ignored by every other engine and mode. Wording changes timbre a "
+            "lot - expect to iterate. Send an instruct field to /synthesize to "
+            "audition one without restarting."),
+    _s("TTS_VOICE_REF_TEXT", "str", default="", section="Speech", restart="tts",
+       help="qwen Base only: what is actually said in TTS_VOICE_REF. The model "
+            "takes the clip AND its transcript; leaving this blank still "
+            "produces speech, just a worse clone, so nothing tells you it is "
+            "missing."),
     # The bot, not the speech service: it sends the voice name on every
     # synthesize call, and the server only falls back to its own --voice when
     # a request omits one. Restarting the speech service therefore changes

@@ -22,6 +22,7 @@ already copied — not an online one against a page that could rate-limit.
 from __future__ import annotations
 
 import hashlib
+import re
 import hmac
 import json
 import os
@@ -67,7 +68,9 @@ def _derive(password: str, salt: bytes, alg: str) -> bytes:
 DEFAULTS = {
     "port": 8086,             # 8085 is the TTS server; do not collide with it
     "remote_access": False,   # bind beyond loopback. Requires a password.
-    "password": None,         # {"salt": hex, "hash": hex}
+    "password": None,         # legacy single password; migrated into "users"
+    # {name: {"salt","alg","hash","role"}}. role is "admin" or "user".
+    "users": {},
     "theme": "dark",
     # Paths, not uploaded blobs. A private key posted through a web form
     # crosses the network — possibly over plain HTTP, since TLS is what you are
@@ -104,6 +107,105 @@ def save(prefs: dict) -> None:
         except OSError:
             pass
         raise
+
+
+ROLES = ("admin", "user")
+# What a non-admin may touch. Everything else — every token in .env, security,
+# setup, updates, service control — is admin-only, enforced server side in
+# gui/server.py. Listed here because it is a policy statement, not a UI detail:
+# the settings API filters reads AND writes against it, so a crafted request
+# from a signed-in General User still cannot reach DISCORD_TOKEN.
+USER_SETTINGS = (
+    "TTS_VOICE",            # which built-in timbre
+    "TTS_VOICE_DESIGN",     # the voice described in words
+    "TTS_VOICE_REF",        # an uploaded clip to clone
+    "TTS_VOICE_REF_TEXT",   # what is said in it
+    "TTS_QWEN_MODEL",       # preset / described / cloned - the kind of voice
+)
+
+
+def _valid_username(name: str) -> bool:
+    """Short, printable, no surprises. Used as a dict key and shown in HTML."""
+    return bool(re.fullmatch(r"[A-Za-z0-9._-]{1,32}", name or ""))
+
+
+def migrate_users(prefs: dict) -> dict:
+    """Turn a pre-RBAC single password into an administrator account.
+
+    Called on every load. The old `password` is kept rather than deleted so a
+    downgrade still works, and so nobody is locked out by a half-applied
+    upgrade — but once `users` exists it is what logins are checked against.
+    """
+    if prefs.get("users"):
+        return prefs
+    legacy = prefs.get("password")
+    if not legacy:
+        return prefs
+    prefs["users"] = {"admin": {**legacy, "role": "admin"}}
+    return prefs
+
+
+def list_users(prefs: dict) -> list:
+    """Names and roles only. Never the hashes."""
+    return sorted(({"name": n, "role": u.get("role", "user")}
+                   for n, u in (prefs.get("users") or {}).items()),
+                  key=lambda u: (u["role"] != "admin", u["name"]))
+
+
+def set_user(prefs: dict, name: str, password: str, role: str) -> str:
+    """Create or update an account. Returns "" on success, else why not."""
+    if not _valid_username(name):
+        return "Names may use letters, numbers, dot, dash and underscore, up to 32."
+    if role not in ROLES:
+        return "Unknown role."
+    users = dict(prefs.get("users") or {})
+    existing = users.get(name)
+    if password:
+        salt = secrets.token_bytes(16)
+        alg = "scrypt" if _HAS_SCRYPT else "pbkdf2"
+        cred = {"salt": salt.hex(), "alg": alg,
+                "hash": _derive(password, salt, alg).hex()}
+    elif existing:
+        cred = {k: existing[k] for k in ("salt", "alg", "hash") if k in existing}
+    else:
+        return "A new account needs a password."
+    users[name] = {**cred, "role": role}
+    prefs["users"] = users
+    return ""
+
+
+def delete_user(prefs: dict, name: str) -> str:
+    """Remove an account. Refuses to remove the last administrator."""
+    users = dict(prefs.get("users") or {})
+    if name not in users:
+        return "No such account."
+    admins = [n for n, u in users.items() if u.get("role") == "admin"]
+    if users[name].get("role") == "admin" and len(admins) <= 1:
+        # Otherwise the panel becomes unadministrable and the only way back is
+        # editing .athena-gui.json by hand — over SSH, on a headless machine.
+        return "That is the only administrator. Make someone else an admin first."
+    del users[name]
+    prefs["users"] = users
+    return ""
+
+
+def check_user(prefs: dict, name: str, password: str) -> str:
+    """The role this name and password authenticate as, or "" for no.
+
+    Always does the full derivation, even for an unknown name, so a wrong
+    username does not answer faster than a wrong password.
+    """
+    users = prefs.get("users") or {}
+    stored = users.get(name) or {}
+    salt_hex = stored.get("salt") or secrets.token_bytes(16).hex()
+    want_hex = stored.get("hash") or "00" * 32
+    alg = stored.get("alg", "scrypt")
+    try:
+        got = _derive(password, bytes.fromhex(salt_hex), alg)
+        ok = hmac.compare_digest(got, bytes.fromhex(want_hex))
+    except (ValueError, TypeError):
+        return ""
+    return stored.get("role", "user") if ok and stored else ""
 
 
 def set_password(prefs: dict, password: str) -> dict:

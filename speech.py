@@ -490,7 +490,12 @@ class Speaker:
             async with httpx.AsyncClient(timeout=config.TTS_TIMEOUT) as client:
                 response = await client.post(
                     f"{config.TTS_URL}/synthesize",
-                    json={"text": text, "voice": config.TTS_VOICE},
+                    # instruct rides along on every call for the same reason
+                    # voice does: it lets the voice change without reloading a
+                    # model. Qwen VoiceDesign takes the description per request,
+                    # and every other engine ignores the field.
+                    json={"text": text, "voice": config.TTS_VOICE,
+                          "instruct": config.TTS_VOICE_DESIGN},
                 )
                 response.raise_for_status()
                 payload = response.content
@@ -547,8 +552,13 @@ class Speaker:
         loaded = 0
         for line in config.TTS_ACK_LINES:
             # Keyed by voice as well as text, so changing the voice renders new
-            # clips instead of playing the old voice's.
-            key = hashlib.sha1(f"{config.TTS_VOICE}|{line}".encode()).hexdigest()[:16]
+            # clips instead of playing the old voice's. TTS_VOICE_DESIGN is in
+            # the key for exactly the same reason: under Qwen VoiceDesign it IS
+            # the voice, and leaving it out meant redescribing her kept playing
+            # the previous description's acks with no way to tell why.
+            key = hashlib.sha1(
+                f"{config.TTS_VOICE}|{config.TTS_VOICE_DESIGN}|{line}".encode()
+            ).hexdigest()[:16]
             path = os.path.join(config.TTS_ACK_DIR, f"{key}.wav")
             payload = None
             if os.path.exists(path):
@@ -558,7 +568,8 @@ class Speaker:
                     async with httpx.AsyncClient(timeout=config.TTS_TIMEOUT) as client:
                         r = await client.post(f"{config.TTS_URL}/synthesize",
                                               json={"text": line,
-                                                    "voice": config.TTS_VOICE})
+                                                    "voice": config.TTS_VOICE,
+                                                    "instruct": config.TTS_VOICE_DESIGN})
                         r.raise_for_status()
                         payload = r.content
                     await asyncio.to_thread(

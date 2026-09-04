@@ -409,10 +409,110 @@ PREVIEW_TEXT = ("Playing Blade Runner. It is two and a half hours long, and you 
                 "have started it twice this month without finishing it.")
 
 
+# Where an uploaded reference lands, and what it is allowed to be called.
+# Written into the repo's own voices directory rather than anywhere the user
+# names: this endpoint takes a filename from a browser, and the only safe
+# reading of that is "a label", never "a destination".
+VOICES_DIR = ROOT / "tts" / "voices"
+_SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
+
+
+def _voice_ref_name(raw_name: str) -> str:
+    """A filename we are willing to create, from one we were handed."""
+    stem = Path(raw_name or "").name           # drop any directory part
+    stem = _SAFE_NAME.sub("_", stem).lstrip(".")
+    stem = stem.rsplit(".", 1)[0][:48] or "reference"
+    return f"{stem}.wav"
+
+
+def transcribe(path: Path) -> str:
+    """What is said in a clip, for Qwen Base's ref_text.
+
+    Run in the BOT's virtualenv, which is the one with faster-whisper — the
+    panel deliberately has no virtualenv of its own, and the speech venvs do
+    not carry Whisper. Returns "" on any failure: a missing transcript makes
+    the clone worse, not broken, and is not worth failing an upload over.
+    """
+    code, out = _run([str(ROOT / ".venv" / "bin" / "python"), "-c", (
+        "import sys,warnings;warnings.filterwarnings('ignore');"
+        "from faster_whisper import WhisperModel;"
+        "m=WhisperModel('small',device='cpu',compute_type='int8',cpu_threads=8);"
+        "segs,_=m.transcribe(sys.argv[1],beam_size=5);"
+        "print(''.join(s.text for s in segs).strip())"), str(path)], timeout=180)
+    return out.strip() if code == 0 else ""
+
+
+def save_voice_ref(data: bytes, filename: str, start: float = 0.0) -> dict:
+    """Store an uploaded clip as a voice reference, and describe what we got.
+
+    Does exactly what scripts/make-voice-ref.sh does, for the same measured
+    reasons: 10 seconds from `start`, mono, 24kHz, loudness-normalised. The
+    speaker encoder only reads the first 6 seconds and the decoder the first
+    10, so a longer clip is not a better one — everything past that is
+    discarded by the model regardless.
+    """
+    import shutil
+    import tempfile
+    import wave
+
+    ffmpeg = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+    if not Path(ffmpeg).exists():
+        return {"ok": False, "error": "ffmpeg not found; brew install ffmpeg"}
+
+    VOICES_DIR.mkdir(parents=True, exist_ok=True)
+    out_name = _voice_ref_name(filename)
+    out_path = VOICES_DIR / out_name
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix or ".bin") as tmp:
+        tmp.write(data)
+        src = Path(tmp.name)
+    try:
+        code, err = _run([ffmpeg, "-v", "error", "-y",
+                          "-ss", str(max(start, 0.0)), "-t", "10", "-i", str(src),
+                          "-af", "loudnorm=I=-18:TP=-2:LRA=11",
+                          "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
+                          str(out_path)], timeout=120)
+        if code != 0 or not out_path.exists():
+            return {"ok": False,
+                    "error": f"Could not decode that file: {err.strip()[:200] or 'unknown format'}"}
+        with wave.open(str(out_path)) as w:
+            seconds = w.getnframes() / w.getframerate()
+        if seconds < 1.0:
+            out_path.unlink(missing_ok=True)
+            return {"ok": False,
+                    "error": f"Only {seconds:.1f}s of audio at that start point. "
+                             "Try a smaller start offset."}
+        text = transcribe(out_path)
+        note = ""
+        if seconds < 5:
+            note = ("Under 5s — the speaker encoder wants about 6, and short "
+                    "references clone poorly.")
+        elif seconds < 9.5:
+            note = "Under 10s, so the decoder sees all of it. Fine, just not maximal."
+        if not text:
+            note = (note + " ").strip() + ("Could not transcribe it — type what "
+                                           "is said, or the clone will be worse.")
+        return {"ok": True,
+                "path": str(out_path.relative_to(ROOT)),
+                "transcript": text,
+                "seconds": round(seconds, 1),
+                "note": note}
+    finally:
+        src.unlink(missing_ok=True)
+
+
 def tts_python() -> Path:
     """The interpreter serving TTS, mirroring scripts/_common.sh tts_python()."""
     env = envfile_values()
-    if env.get("TTS_ENGINE", "kokoro") == "chatterbox":
+    engine = env.get("TTS_ENGINE", "kokoro")
+    # Must stay in step with scripts/_common.sh tts_python(). Three engines,
+    # three virtualenvs: mlx-audio pulls no torch at all and Chatterbox pins
+    # torch 2.6 against Kokoro's 2.14, so none of them can share one.
+    if engine == "qwen":
+        mlx = ROOT / "tts" / ".venv-mlx" / "bin" / "python"
+        if mlx.exists():
+            return mlx
+    if engine == "chatterbox":
         cb = ROOT / "tts" / ".venv-chatterbox" / "bin" / "python"
         if cb.exists():
             return cb
@@ -425,10 +525,17 @@ def envfile_values() -> dict:
     return envfile.read(ROOT / ".env")
 
 
-def preview(voice: str, lang: str, text: str = "") -> tuple:
-    """(wav bytes, error dict). Asks the running server to speak, not to play."""
+def preview(voice: str, lang: str, text: str = "", instruct: str = "") -> tuple:
+    """(wav bytes, error dict). Asks the running server to speak, not to play.
+
+    `instruct` is Qwen VoiceDesign's voice-in-words. It is forwarded unsaved so
+    a description can be auditioned before committing it — which is the whole
+    point of the mode, since the wording changes the timbre substantially and
+    is not something you can predict from reading it.
+    """
     payload = json.dumps({"text": (text or PREVIEW_TEXT)[:600],
                           "voice": voice or "bf_emma",
+                          "instruct": instruct,
                           "lang": lang or "auto"}).encode()
     req = urllib.request.Request("http://127.0.0.1:8085/synthesize", data=payload,
                                  headers={"Content-Type": "application/json"})

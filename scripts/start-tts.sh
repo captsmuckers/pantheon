@@ -32,21 +32,35 @@ if [[ -n "$(find_pids 'python.*tts_server\.py')" ]]; then
     exit 0
 fi
 
-if ! "$PYTHON" -c "import torch, kokoro" 2>/dev/null; then
-    echo "FATAL: TTS dependencies missing from $PYTHON" >&2
-    echo "  brew install python@3.12" >&2
-    echo "  /opt/homebrew/bin/python3.12 -m venv tts/.venv" >&2
-    echo "  tts/.venv/bin/python -m pip install -r tts/requirements.txt" >&2
+# Preflight the imports the SELECTED engine needs, not Kokoro's.
+# This checked "import torch, kokoro" unconditionally, which is wrong for both
+# of the others: the MLX venv has no torch at all, so a correctly installed
+# Qwen environment failed here and told you to reinstall Kokoro.
+ENGINE="$(env_value TTS_ENGINE kokoro)"
+case "$ENGINE" in
+    qwen)       NEEDS="mlx_audio"      ; VENV="tts/.venv-mlx"        ; HINT="pip install mlx-audio" ;;
+    chatterbox) NEEDS="torch, chatterbox" ; VENV="tts/.venv-chatterbox" ; HINT="pip install 'setuptools<81' chatterbox-tts" ;;
+    *)          NEEDS="torch, kokoro"  ; VENV="tts/.venv"            ; HINT="pip install -r tts/requirements.txt" ;;
+esac
+if ! "$PYTHON" -c "import ${NEEDS}" 2>/dev/null; then
+    echo "FATAL: $ENGINE dependencies missing from $PYTHON (need: $NEEDS)" >&2
+    echo "  /opt/homebrew/bin/python3.12 -m venv $VENV" >&2
+    echo "  $VENV/bin/python -m $HINT" >&2
     echo "(3.12, not 3.13 - kokoro declares Requires-Python <3.13)" >&2
     exit 1
 fi
 
+tts_exports
+ENGINE_ARGS="$(tts_args)"
 LOG="$(new_log tts)"
 cd "$TTS_DIR"
 echo "$(date +%FT%T)  ---- starting TTS ($PYTHON) ----" >> "$LOG"
 # --preload loads the model now rather than on the first request, so the first
 # thing she says isn't delayed by several seconds of model load.
-nohup "$PYTHON" tts_server.py --preload --host "$BIND_HOST" >> "$LOG" 2>&1 &
+# Engine flags, same as launchd-tts.sh. Without these a hand-started server
+# ignored TTS_ENGINE entirely and always came up as Kokoro, which looks exactly
+# like the engine setting being ignored.
+nohup "$PYTHON" tts_server.py --preload --host "$BIND_HOST" $ENGINE_ARGS >> "$LOG" 2>&1 &
 echo "TTS starting (pid $!) - log: $LOG"
 
 deadline=$(( $(date +%s) + 90 ))

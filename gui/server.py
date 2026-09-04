@@ -72,27 +72,69 @@ SESSION_LIFETIME = 12 * 3600
 _LOCK = threading.Lock()
 
 
-def _new_session() -> str:
+def _new_session(user: str = "", role: str = "admin") -> str:
+    """A session now remembers WHO, because authorisation depends on it.
+
+    The role is captured at sign-in rather than looked up per request. That is
+    deliberate: demoting someone should not silently change what their open
+    tabs can do halfway through: it takes effect when they next sign in, and
+    an admin who wants it immediate deletes the account, which drops the
+    session with it.
+    """
     token = _secrets.token_urlsafe(32)
     with _LOCK:
         now = time.time()
-        for k, exp in list(SESSIONS.items()):
-            if exp < now:
+        for k, rec in list(SESSIONS.items()):
+            if rec["exp"] < now:
                 del SESSIONS[k]
-        SESSIONS[token] = now + SESSION_LIFETIME
+        SESSIONS[token] = {"exp": now + SESSION_LIFETIME, "user": user,
+                           "role": role}
     return token
 
 
-def _valid_session(token: str) -> bool:
+def _session_of(token: str) -> dict:
+    """The live session record, or {} — expiry is checked here, once."""
     with _LOCK:
-        exp = SESSIONS.get(token or "")
-        if exp is None:
-            return False
-        if exp < time.time():
+        rec = SESSIONS.get(token or "")
+        if rec is None:
+            return {}
+        if rec["exp"] < time.time():
             del SESSIONS[token]
-            return False
-    return True
+            return {}
+        return dict(rec)
 
+
+def _valid_session(token: str) -> bool:
+    return bool(_session_of(token))
+
+
+def drop_sessions_for(user: str) -> None:
+    """Sign a named account out everywhere. Used when it is deleted."""
+    with _LOCK:
+        for k, rec in list(SESSIONS.items()):
+            if rec.get("user") == user:
+                del SESSIONS[k]
+
+
+# Biggest voice reference accepted, in bytes. Generous because the useful
+# source is often a long recording the user trims with the start offset, and
+# stingy enough that the panel — a single-threaded stdlib server — cannot be
+# made to buffer something absurd. Only /api/tts/voice-ref may reach this.
+VOICE_REF_MAX = 60_000_000
+
+# WHAT A GENERAL USER MAY REACH. An allowlist, not a blocklist: a route added
+# later is admin-only until somebody deliberately opens it, which is the safe
+# direction to fail in. Everything absent from here — settings beyond the voice
+# fields, security, setup, updates, service control, the panel restart — is
+# administrator-only and refused in dispatch, before any handler runs, so it
+# cannot be reached by a crafted request from a signed-in friend.
+USER_PATHS = frozenset({
+    "/", "/voice",                 # status, and the voice page
+    "/api/status", "/api/logout",
+    "/api/tts/voices", "/api/tts/preview", "/api/tts/voice-ref",
+    "/api/settings",               # FILTERED by role - see _settings_for_role
+    "/api/service",                # RESTRICTED to bot/tts restart - see _service
+})
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "athena-gui"
@@ -162,6 +204,13 @@ class Handler(BaseHTTPRequestHandler):
             length = 0
         if length <= 0:
             return
+        # One path keeps more than the rest. Everything here is JSON well under
+        # a megabyte except a voice reference, which is an audio file the user
+        # picked in the browser — a minute of 48kHz stereo WAV is ~11MB. The
+        # cap is per-path rather than global so an ordinary settings POST still
+        # cannot be used to make the panel hold 60MB.
+        keep = (VOICE_REF_MAX if self.path == "/api/tts/voice-ref"
+                else 1_000_000)
         # Still drained when oversized, just not kept: leaving it unread would
         # desynchronise the connection exactly as before.
         remaining = length
@@ -171,7 +220,7 @@ class Handler(BaseHTTPRequestHandler):
             if not chunk:
                 break
             remaining -= len(chunk)
-            if length <= 1_000_000:
+            if length <= keep:
                 chunks.append(chunk)
         self._raw_body = b"".join(chunks)
 
@@ -258,6 +307,28 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return _valid_session(self._cookies().get("athena_session", ""))
 
+    def _session(self) -> dict:
+        return _session_of(self._cookies().get("athena_session", ""))
+
+    def _role(self) -> str:
+        """"admin" or "user".
+
+        Follows _authed's reasoning exactly: with no password and no accounts
+        configured the panel is open and loopback-only, so the caller is the
+        operator and is an administrator. Without this a fresh install locks
+        ITSELF out — every page 403s before a password can even be set, which
+        is the state the panel exists to get you out of.
+
+        Once accounts exist, an unrecognised session is the weaker role.
+        """
+        p = self.server.prefs
+        if not prefs.has_password(p) and not (p.get("users") or {}):
+            return "admin"
+        return self._session().get("role", "user")
+
+    def _is_admin(self) -> bool:
+        return self._role() == "admin"
+
     def _csrf_ok(self) -> bool:
         return bool(self.headers.get("X-Pantheon-CSRF"))
 
@@ -301,6 +372,17 @@ class Handler(BaseHTTPRequestHandler):
                     self._html(pages.login_page(), 401)
                 return
 
+            # Role gate. After authentication, before anything else: a
+            # General User asking for /security gets the same answer whether
+            # or not the handler behind it would have worked.
+            if not self._is_admin() and path not in USER_PATHS:
+                if self._wants_json():
+                    self._json(403, {"ok": False,
+                                     "error": "Administrators only."})
+                else:
+                    self._html(pages.forbidden_page(), 403)
+                return
+
             if method == "POST":
                 if not self._csrf_ok():
                     self._fail(403, "Missing CSRF header.")
@@ -322,9 +404,11 @@ class Handler(BaseHTTPRequestHandler):
             if not setup_mod.probe()["ready"]:
                 self._send(302, b"", "text/plain", {"Location": "/setup"})
                 return
-            self._html(pages.status_page())
+            self._html(pages.status_page(self._role()))
         elif path == "/settings":
             self._html(pages.settings_page())
+        elif path == "/voice":
+            self._html(pages.voice_page(self._role()))
         elif path == "/logs":
             self._html(pages.logs_page())
         elif path == "/security":
@@ -349,13 +433,15 @@ class Handler(BaseHTTPRequestHandler):
                              "system": system_mod.snapshot(),
                              "root": str(ROOT)})
         elif path == "/api/settings":
-            self._json(200, _settings_payload())
+            self._json(200, _settings_payload(self._role()))
         elif path == "/api/logs":
             self._api_logs(query)
         elif path == "/api/logstreams":
             self._json(200, {"streams": logs.available()})
         elif path == "/api/security":
             self._json(200, _security_state(self.server.prefs))
+        elif path == "/api/users":
+            self._users()
         elif path == "/api/tts/languages":
             self._json(200, _languages())
         elif path == "/api/tts/voices":
@@ -366,16 +452,34 @@ class Handler(BaseHTTPRequestHandler):
     def _post(self, path: str):
         body = self._body()
         if path == "/api/service":
-            result = services.act(str(body.get("service", "")),
-                                  str(body.get("action", "")))
+            service = str(body.get("service", ""))
+            action = str(body.get("action", ""))
+            # A General User may bounce the two services their own voice
+            # change needs, and nothing else. Without this the feature does
+            # not work at all: TTS_VOICE_DESIGN needs the bot restarted and
+            # TTS_QWEN_MODEL needs the speech service, so "you may change the
+            # voice but not apply it" would be a setting that silently does
+            # nothing. Stop is not offered — only restart.
+            if not self._is_admin() and (service not in ("bot", "tts")
+                                         or action != "restart"):
+                self._json(403, {"ok": False,
+                                 "error": "Administrators only."})
+                return
+            result = services.act(service, action)
             self._json(200 if result["ok"] else 500, result)
         elif path == "/api/settings":
-            self._json(*_save_settings(body))
+            self._json(*_save_settings(body, self._role()))
         elif path == "/api/security":
             code, payload, extra = self._save_security(body)
             self._json(code, payload, extra)
         elif path == "/api/tts/preview":
             self._preview(body)
+        elif path == "/api/tts/voice-ref":
+            self._voice_ref()
+        elif path == "/api/panel/restart":
+            self._restart_panel()
+        elif path == "/api/users":
+            self._save_user(body)
         elif path == "/api/tts/install-language":
             result = services.install_language(str(body.get("lang", "")))
             self._json(200 if result["ok"] else 500, result)
@@ -408,29 +512,141 @@ class Handler(BaseHTTPRequestHandler):
 
     def _login(self):
         p = self.server.prefs
-        password = str(self._body().get("password", ""))
-        if not prefs.has_password(p):
+        body = self._body()
+        name = str(body.get("username", "")).strip()
+        password = str(body.get("password", ""))
+        if not prefs.has_password(p) and not (p.get("users") or {}):
+            # Nothing configured yet: first run, before a password is set.
             self._json(200, {"ok": True})
             return
-        # A uniform delay on failure. Not a rate limiter — just enough that a
-        # wrong password does not answer measurably faster than a right one.
-        if not prefs.check_password(p, password):
+
+        role = prefs.check_user(p, name, password) if name else ""
+        if not role and not name:
+            # No username given. Accept the legacy single password so an
+            # upgrade does not lock anyone out of their own panel, and sign
+            # them in as the administrator it migrated into.
+            if prefs.check_password(p, password):
+                role = "admin"
+                name = "admin"
+        if not role:
+            # A uniform delay on failure. Not a rate limiter — just enough that
+            # a wrong password does not answer measurably faster than a right
+            # one. check_user derives even for an unknown name for the same
+            # reason, so a wrong USERNAME is not faster either.
             time.sleep(0.5)
-            self._json(401, {"ok": False, "error": "Wrong password."})
+            self._json(401, {"ok": False,
+                             "error": "Wrong username or password."})
             return
-        token = _new_session()
-        self._json(200, {"ok": True},
+        token = _new_session(name, role)
+        self._json(200, {"ok": True, "role": role, "user": name},
                    {"Set-Cookie": self._session_cookie(token)})
+
+    def _users(self):
+        """List accounts. Admin-only by the dispatch gate, never hashes."""
+        self._json(200, {"users": prefs.list_users(self.server.prefs),
+                         "me": self._session().get("user", "")})
+
+    def _save_user(self, body: dict):
+        p = self.server.prefs
+        action = str(body.get("action", ""))
+        name = str(body.get("name", "")).strip()
+        me = self._session().get("user", "")
+
+        if action == "delete":
+            if name == me:
+                self._json(400, {"ok": False,
+                                 "error": "That is you. Another admin can remove it."})
+                return
+            err = prefs.delete_user(p, name)
+            if err:
+                self._json(400, {"ok": False, "error": err})
+                return
+            prefs.save(p)
+            # Their open tabs stop working now rather than in twelve hours.
+            drop_sessions_for(name)
+            self._json(200, {"ok": True, "users": prefs.list_users(p)})
+            return
+
+        role = str(body.get("role", "user"))
+        password = str(body.get("password", ""))
+        existing = (p.get("users") or {}).get(name)
+        if existing and existing.get("role") == "admin" and role != "admin":
+            admins = [n for n, u in (p.get("users") or {}).items()
+                      if u.get("role") == "admin"]
+            if len(admins) <= 1:
+                self._json(400, {"ok": False,
+                                 "error": "That is the only administrator."})
+                return
+        err = prefs.set_user(p, name, password, role)
+        if err:
+            self._json(400, {"ok": False, "error": err})
+            return
+        prefs.save(p)
+        self._json(200, {"ok": True, "users": prefs.list_users(p)})
 
     def _preview(self, body: dict):
         """Speak a line with an unsaved voice, so it can be judged before saving."""
         wav, error = services.preview(str(body.get("voice") or ""),
                                       str(body.get("lang") or "auto"),
-                                      str(body.get("text") or ""))
+                                      str(body.get("text") or ""),
+                                      str(body.get("instruct") or ""))
         if error is not None:
             self._json(409 if error.get("needs") else 502, {"ok": False, **error})
             return
         self._send(200, wav, "audio/wav", {"Cache-Control": "no-store"})
+
+    def _restart_panel(self):
+        """Boot this panel's own launchd job, so it comes back with new code.
+
+        Deliberately Security-only and deliberately restart-only. There is no
+        Stop: the panel is the only way in on a headless machine, and a browser
+        cannot start it again — a Stop button would be a one-way door.
+
+        The reply must be flushed BEFORE the process dies or the browser sees a
+        dropped connection instead of an answer, so the kickstart is scheduled
+        on a timer and this returns immediately. launchd's KeepAlive is what
+        actually restarts it; kickstart -k just ends the current process.
+        """
+        import threading
+
+        label = f"gui/{os.getuid()}/com.athena.gui"
+
+        def boot():
+            subprocess.run(["launchctl", "kickstart", "-k", label],
+                           capture_output=True, timeout=20)
+
+        self._json(200, {"ok": True, "restarting": True})
+        try:
+            self.wfile.flush()
+        except Exception:
+            pass
+        threading.Timer(0.4, boot).start()
+
+    def _voice_ref(self):
+        """Take an uploaded clip and turn it into a usable voice reference.
+
+        The body is the raw file, not multipart: the browser can POST a File
+        object directly, and a hand-rolled multipart parser in a stdlib server
+        is a much larger thing to get right than this endpoint deserves.
+
+        Returns the settings to apply rather than writing them. The transcript
+        comes from Whisper and is occasionally wrong, and the person uploading
+        is the one who knows what was said — so it lands in the form for review
+        and is saved by the ordinary Save button, like every other setting.
+        """
+        raw = self._raw_body
+        if not raw:
+            self._json(400, {"ok": False,
+                             "error": "No file received. It may be over the "
+                                      f"{VOICE_REF_MAX // 1_000_000}MB limit."})
+            return
+        name = self.headers.get("X-Voice-Filename") or "upload.wav"
+        try:
+            start = float(self.headers.get("X-Voice-Start") or 0)
+        except ValueError:
+            start = 0.0
+        result = services.save_voice_ref(raw, name, start)
+        self._json(200 if result.get("ok") else 400, result)
 
     def _api_logs(self, query: dict):
         key = (query.get("stream") or ["athena"])[0]
@@ -611,7 +827,7 @@ def _security_state(p: dict) -> dict:
 
 # ---------------------------------------------------------------------- settings
 
-def _settings_payload() -> dict:
+def _settings_payload(role: str = "admin") -> dict:
     """Every setting, its current value, and its description — minus the secrets.
 
     A secret is reported as whether one is stored and its last four characters,
@@ -621,7 +837,14 @@ def _settings_payload() -> dict:
     """
     current = envfile.read(ENV_PATH)
     fields = []
+    # A General User sees ONLY the voice fields, and this is where that is
+    # enforced for reads. Filtering the payload rather than hiding fields in
+    # the browser is the whole point: the values include every token in .env,
+    # so a hidden field would still be one devtools panel away.
+    allowed = None if role == "admin" else set(prefs.USER_SETTINGS)
     for s in schema.for_platform(sys.platform):
+        if allowed is not None and s.name not in allowed:
+            continue
         entry = {
             "name": s.name, "kind": s.kind, "help": s.help, "section": s.section,
             "required": s.required, "advanced": s.advanced, "restart": s.restart,
@@ -642,7 +865,9 @@ def _settings_payload() -> dict:
             entry["value"] = current.get(s.name, entry["default"])
             entry["explicit"] = s.name in current
         fields.append(entry)
-    return {"fields": fields, "sections": list(schema.SECTIONS),
+    sections = (list(schema.SECTIONS) if allowed is None
+                else sorted({f["section"] for f in fields}))
+    return {"fields": fields, "sections": sections, "role": role,
             "env_exists": ENV_PATH.exists(), "env_path": str(ENV_PATH)}
 
 
@@ -666,7 +891,7 @@ def _languages() -> dict:
                             for k, v in services.LANGUAGE_PACKAGES.items()}}
 
 
-def _save_settings(body: dict):
+def _save_settings(body: dict, role: str = "admin"):
     """Validate, then write, then say what needs restarting.
 
     Validation is total before anything is written: a form with one bad number
@@ -677,6 +902,15 @@ def _save_settings(body: dict):
     clear = [str(k) for k in (body.get("clear") or [])]
     if not isinstance(values, dict):
         return 400, {"ok": False, "error": "Malformed submission."}
+
+    # The same allowlist as the read path, applied to writes. Refused rather
+    # than silently dropped: a General User who somehow submits DISCORD_TOKEN
+    # should be told no, not left believing it saved.
+    if role != "admin":
+        forbidden = sorted((set(values) | set(clear)) - set(prefs.USER_SETTINGS))
+        if forbidden:
+            return 403, {"ok": False,
+                         "error": "Administrators only: " + ", ".join(forbidden)}
 
     changes, errors = {}, {}
     for name, raw in values.items():
@@ -730,6 +964,13 @@ def _saved_message(moved: list) -> str:
 
 def serve(port: int = None, host: str = None) -> None:
     p = prefs.load()
+    # Turn a pre-RBAC single password into an administrator account, once, at
+    # startup. Persisted immediately so the accounts page is not empty on a
+    # panel that has always had a password.
+    before = dict(p.get("users") or {})
+    p = prefs.migrate_users(p)
+    if (p.get("users") or {}) != before:
+        prefs.save(p)
     host = host or prefs.bind_host(p)
     port = port or int(p.get("port") or 8086)
 

@@ -14,6 +14,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 TTS_DIR="$ROOT/tts"
 PYTHON="$(tts_python)"
 # Unquoted on purpose: this is a flag list, not one argument.
+tts_exports
 ENGINE_ARGS="$(tts_args)"
 
 LOG="$(new_log tts)"

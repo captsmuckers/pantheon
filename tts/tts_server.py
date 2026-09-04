@@ -65,6 +65,36 @@ DEFAULT_VOICE = "bf_emma"
 # clip its voice is cloned from. Set from the command line in main().
 ENGINE = "kokoro"
 VOICE_REF = ""
+# Qwen3-TTS only. The transcript of VOICE_REF: the Base model is documented to
+# take the reference clip AND what is said in it, and omitting this clones
+# audibly worse while still producing perfectly plausible audio — so nothing
+# fails, it just quietly sounds less like the reference.
+VOICE_REF_TEXT = ""
+# Qwen3-TTS VoiceDesign only: the voice described in words, e.g. "a low, dry,
+# aristocratic English woman, bored and faintly contemptuous".
+VOICE_DESIGN = ""
+# Which Qwen checkpoint to serve. The repo id is also the mode switch — Qwen
+# publishes Base (clone from a clip), CustomVoice (9 fixed timbres) and
+# VoiceDesign (describe it in words) as SEPARATE checkpoints, so the mode is
+# not a parameter you can flip at runtime; it decides which weights load.
+QWEN_MODEL = "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"
+
+# The 9 timbres CustomVoice ships. Hard-coded because they are baked into the
+# weights rather than listed by any endpoint, and the settings page needs them
+# to draw a picker. Only Ryan and Aiden are natively English and both are male;
+# the female voices are Chinese-native reading English, which is usable but is
+# the reason VoiceDesign exists as an alternative.
+QWEN_SPEAKERS = {
+    "Ryan":      ("English",  False, "Dynamic male, strong rhythmic drive"),
+    "Aiden":     ("English",  False, "Sunny American male, clear midrange"),
+    "Vivian":    ("Chinese",  True,  "Bright, slightly edgy young female"),
+    "Serena":    ("Chinese",  True,  "Warm, gentle young female"),
+    "Uncle_Fu":  ("Chinese",  False, "Seasoned male, low mellow timbre"),
+    "Dylan":     ("Chinese",  False, "Youthful Beijing male, clear and natural"),
+    "Eric":      ("Chinese",  False, "Lively Chengdu male, slightly husky"),
+    "Ono_Anna":  ("Japanese", True,  "Playful female, light nimble timbre"),
+    "Sohee":     ("Korean",   True,  "Warm female, rich emotion"),
+}
 # Which phonemiser turns spelling into sound. This is NOT the voice: the voice
 # file decides who it sounds like, this decides how words are pronounced. They
 # are chosen separately and Kokoro's convention is that the voice name's first
@@ -123,6 +153,36 @@ VOICES_DOC = f"https://huggingface.co/{VOICES_REPO}/blob/main/VOICES.md"
 SAMPLES_DOC = f"https://huggingface.co/{VOICES_REPO}/blob/main/SAMPLES.md"
 
 _voices_cache = None
+
+
+def qwen_voice_list() -> dict:
+    """Qwen's timbres in the SAME shape Kokoro's list_voices() returns.
+
+    Matching the existing payload exactly is the point: the settings page
+    already groups by lang_name, draws a chip per id and marks downloaded ones,
+    and reusing that costs nothing. Returning a different shape here made the
+    picker report "Voice list unavailable", because paintVoices tests d.count
+    and I had not sent one.
+
+    Only CustomVoice has timbres. The other two modes return count 0 with a
+    message, which the picker already renders instead of an empty grid.
+    """
+    mode = qwen_mode()
+    if mode != "customvoice":
+        why = ("This checkpoint designs a voice from your description - "
+               "type one in Voice design, then press Test."
+               if mode == "voicedesign" else
+               "This checkpoint clones the clip in Voice reference.")
+        return {"voices": [], "count": 0, "source": "built-in",
+                "message": why, "mode": mode, "model": QWEN_MODEL,
+                "doc": "https://huggingface.co/" + QWEN_MODEL}
+    out = [{"id": name, "lang": lang[:1].lower(), "lang_name": lang,
+            "female": female, "downloaded": True, "note": note}
+           for name, (lang, female, note) in QWEN_SPEAKERS.items()]
+    return {"voices": out, "count": len(out), "source": "built-in",
+            "mode": mode, "model": QWEN_MODEL,
+            "doc": "https://huggingface.co/" + QWEN_MODEL,
+            "samples": "https://huggingface.co/" + QWEN_MODEL}
 
 
 def list_voices() -> dict:
@@ -400,8 +460,27 @@ def _synth_chatterbox(text: str, device: str) -> bytes:
 
 
 def _release_device_memory(device: str) -> None:
-    """Return the accelerator's cached blocks. Never raises into a request."""
+    """Return the accelerator's cached blocks. Never raises into a request.
+
+    Two allocators, because the engines do not share a runtime. MLX keeps its
+    own Metal buffer cache which — unlike torch's — does NOT show up in the
+    process's RSS, so it is invisible to `ps` and to the control panel's
+    process view. Measured on an M2 Max: a Qwen server sat at 3.0GB RSS while
+    actually holding ~6.3GB of unified memory, the difference being this cache.
+    MEASURED, and it is NOT a leak: the cache plateaus by itself after a few
+    calls (11.18GB free after 5 syntheses, 11.30GB after 15). Clearing it made
+    no difference to steady-state footprint under load either — 11.30GB vs
+    11.52GB with and without, which is noise. It is kept because it costs
+    nothing, mirrors what the Kokoro path already does, and does hand memory
+    back during idle gaps between auditions; do NOT expect it to reduce the
+    ~6.3GB a running Qwen server occupies.
+    """
     try:
+        if ENGINE == "qwen":
+            import mlx.core as mx
+
+            mx.clear_cache()
+            return
         import torch
 
         if device == "mps" and hasattr(torch, "mps"):
@@ -412,7 +491,85 @@ def _release_device_memory(device: str) -> None:
         log.debug("Could not release device memory", exc_info=True)
 
 
-def synthesize(text: str, voice: str, device: str, lang: str = None) -> bytes:
+_qwen_model = None
+
+
+def _qwen(device: str):
+    """Load the Qwen3-TTS checkpoint. Device is ignored, deliberately.
+
+    mlx-audio runs on MLX, which is always the Apple-silicon GPU — there is no
+    cpu/mps choice to make. Measured on an M2 Max: MLX is ~2.2-2.6x faster than
+    the same model under PyTorch MPS, which is why this engine exists at all.
+    """
+    global _qwen_model
+    if _qwen_model is None:
+        with _lock:
+            if _qwen_model is None:
+                from mlx_audio.tts.utils import load_model
+
+                log.info("Loading Qwen3-TTS %s", QWEN_MODEL)
+                _qwen_model = load_model(QWEN_MODEL)
+                log.info("Ready")
+    return _qwen_model
+
+
+def qwen_mode(model_id: str = "") -> str:
+    """base | customvoice | voicedesign, read off the checkpoint name.
+
+    Inferred rather than configured separately so the two can never disagree.
+    A mode setting that says "customvoice" against a Base checkpoint would be
+    accepted by every layer here and then silently ignore the speaker name.
+    """
+    name = (model_id or QWEN_MODEL).lower()
+    if "customvoice" in name:
+        return "customvoice"
+    if "voicedesign" in name:
+        return "voicedesign"
+    return "base"
+
+
+def _synth_qwen(text: str, voice: str, instruct: str) -> bytes:
+    """One WAV from Qwen3-TTS, in whichever mode the checkpoint implies.
+
+    generate() yields CHUNKS, not one waveform — returning the first one only
+    gives a clipped first sentence, which reads as the model truncating rather
+    than as a bug here.
+    """
+    model = _qwen(None)
+    mode = qwen_mode()
+    kwargs = {}
+    if mode == "customvoice":
+        kwargs["voice"] = voice or DEFAULT_VOICE
+    elif mode == "voicedesign":
+        kwargs["instruct"] = instruct or VOICE_DESIGN
+    elif VOICE_REF:
+        kwargs["ref_audio"] = VOICE_REF
+        if VOICE_REF_TEXT:
+            kwargs["ref_text"] = VOICE_REF_TEXT
+
+    with _lock:
+        chunks, sr = [], None
+        for result in model.generate(text=text, **kwargs):
+            chunks.append(np.asarray(result.audio, dtype=np.float32).squeeze())
+            sr = getattr(result, "sample_rate", None) or sr
+    if not chunks:
+        return b""
+    audio = np.concatenate(chunks)
+    # Same reasoning as the Kokoro path below, different allocator. Done after
+    # the copy into numpy so nothing still needed is thrown away.
+    del chunks
+    _release_device_memory(None)
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr or SAMPLE_RATE)
+        w.writeframes((np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes())
+    return buf.getvalue()
+
+
+def synthesize(text: str, voice: str, device: str, lang: str = None,
+               instruct: str = "") -> bytes:
     """Return a WAV. One inference at a time — the model is not thread-safe.
 
     On the Windows machine serialising also kept this off a GPU shared with
@@ -421,6 +578,8 @@ def synthesize(text: str, voice: str, device: str, lang: str = None) -> bytes:
     """
     if ENGINE == "chatterbox":
         return _synth_chatterbox(text, device)
+    if ENGINE == "qwen":
+        return _synth_qwen(text, voice, instruct)
     pipeline = get_pipeline(device, lang or lang_for(voice))
     with _lock:
         chunks = [audio for _, _, audio in pipeline(text, voice=voice, speed=1.0)]
@@ -500,6 +659,9 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/voices":
             # Listed here because this process is the one that knows which are
             # on disk, and the settings page has no huggingface_hub to ask.
+            if ENGINE == "qwen":
+                self._json(200, qwen_voice_list())
+                return
             self._json(200, list_voices())
             return
         if parsed.path in ("/", "/logs"):
@@ -517,12 +679,23 @@ class Handler(BaseHTTPRequestHandler):
         # loaded the model was, and launchd-athena.sh, which waits on exactly
         # this before starting the bot, would have burned its full 90s timeout
         # on every single boot.
-        loaded = _cb_model is not None if ENGINE == "chatterbox" else bool(_pipelines)
+        # Each engine keeps its loaded model in its own global, so this has to
+        # branch per engine. Getting it wrong is not cosmetic: launchd-athena.sh
+        # blocks on ready:true before starting the bot, so an engine missing
+        # from here burns that full 90s timeout on every boot.
+        if ENGINE == "chatterbox":
+            loaded = _cb_model is not None
+        elif ENGINE == "qwen":
+            loaded = _qwen_model is not None
+        else:
+            loaded = bool(_pipelines)
         lang = lang_for(DEFAULT_VOICE)
         self._json(200, {"status": "ok", "ready": loaded,
                          "voice": (VOICE_REF or DEFAULT_VOICE) if ENGINE == "chatterbox"
                                   else DEFAULT_VOICE,
                          "engine": ENGINE, "device": self.device,
+                         **({"qwen_model": QWEN_MODEL, "qwen_mode": qwen_mode(),
+                             "voice_design": VOICE_DESIGN} if ENGINE == "qwen" else {}),
                          "lang": lang, "lang_setting": LANG_CODE,
                          "lang_name": LANGUAGES.get(lang, lang),
                          "languages": language_report()})
@@ -541,13 +714,20 @@ class Handler(BaseHTTPRequestHandler):
         text = (payload.get("text") or "").strip()[:MAX_CHARS]
         voice = payload.get("voice") or DEFAULT_VOICE
         lang = payload.get("lang") or None
+        # Per-request so a voice can be auditioned without restarting the
+        # service. Loading a Qwen checkpoint takes ~20-33s, and having to pay
+        # that to hear one adjective changed makes the feature unusable.
+        instruct = (payload.get("instruct") or "").strip()
         if not text:
             self._json(400, {"error": "no text"})
             return
-        if lang and lang != "auto" and lang not in LANGUAGES:
+        # Kokoro's phonemiser codes. Qwen and Chatterbox have no equivalent, so
+        # a lang on those requests is meaningless rather than invalid — reject
+        # it only for the engine it actually means something to.
+        if ENGINE == "kokoro" and lang and lang != "auto" and lang not in LANGUAGES:
             self._json(400, {"error": f"unknown language {lang!r}"})
             return
-        if lang and lang != "auto" and not language_available(lang):
+        if ENGINE == "kokoro" and lang and lang != "auto" and not language_available(lang):
             self._json(409, {"error": f"{LANGUAGES[lang]} needs an extra package",
                              "lang": lang, "needs": EXTRAS[lang]["pip"]})
             return
@@ -555,7 +735,7 @@ class Handler(BaseHTTPRequestHandler):
             lang = None
 
         try:
-            wav = synthesize(text, voice, self.device, lang)
+            wav = synthesize(text, voice, self.device, lang, instruct)
         except Exception as exc:
             log.exception("Synthesis failed")
             # A voice name that does not exist surfaces as a 404 from the
@@ -582,6 +762,7 @@ def main():
     # Declared up front: argparse reads DEFAULT_VOICE below as a default value,
     # and Python rejects a global statement that comes after the name is used.
     global ENGINE, VOICE_REF, LANG_CODE, DEFAULT_VOICE
+    global VOICE_REF_TEXT, VOICE_DESIGN, QWEN_MODEL
     ap = argparse.ArgumentParser()
     # 127.0.0.1 by default. Pass 0.0.0.0 to reach the log page from another
     # machine — a firewall rule alone cannot do it, because loopback means
@@ -596,9 +777,30 @@ def main():
     # platform so neither machine needs the flag.
     ap.add_argument("--device", default=Handler.device,
                     choices=("cuda", "mps", "cpu"))
-    ap.add_argument("--engine", default="kokoro", choices=("kokoro", "chatterbox"),
+    ap.add_argument("--engine", default="kokoro",
+                    choices=("kokoro", "chatterbox", "qwen"),
                     help="kokoro is fast and mispronounces proper nouns; "
                          "chatterbox is ~35x slower and does not")
+    ap.add_argument("--qwen-model", default=QWEN_MODEL,
+                    help="qwen only: which checkpoint to serve. The repo name "
+                         "also selects the mode - Base clones from --voice-ref, "
+                         "CustomVoice uses --voice, VoiceDesign uses "
+                         "--voice-design.")
+    # Defaulted from the environment, not just the flag. scripts/_common.sh
+    # exports these rather than passing them as arguments, because the
+    # launchers word-split tts_args' output and a voice description is a whole
+    # sentence. Reading them here is the other half of that mechanism — without
+    # it the export went nowhere and any /synthesize call that did not carry
+    # its own instruct (the panel's Test button, the test suite) failed with
+    # "VoiceDesign model requires...", while the bot worked, because the bot
+    # sends the description on every request.
+    ap.add_argument("--ref-text", default=os.environ.get("ATHENA_TTS_REF_TEXT", ""),
+                    help="qwen Base only: what is said in --voice-ref. The "
+                         "model takes both; without it the clone is worse but "
+                         "nothing errors.")
+    ap.add_argument("--voice-design",
+                    default=os.environ.get("ATHENA_TTS_VOICE_DESIGN", ""),
+                    help="qwen VoiceDesign only: the voice described in words.")
     ap.add_argument("--voice-ref", default="",
                     help="chatterbox only: a few seconds of the voice to clone")
     ap.add_argument("--voice", default=DEFAULT_VOICE,
@@ -613,11 +815,11 @@ def main():
                     help="load the model at startup instead of on first request")
     args = ap.parse_args()
 
-    if args.lang != "auto" and args.lang not in LANGUAGES:
+    if args.engine == "kokoro" and args.lang != "auto" and args.lang not in LANGUAGES:
         ap.error(f"--lang {args.lang!r} is not a language Kokoro publishes "
                  "voices for; choose auto or one of "
                  + ", ".join(f"{k} ({v})" for k, v in sorted(LANGUAGES.items())))
-    if args.lang != "auto" and not language_available(args.lang):
+    if args.engine == "kokoro" and args.lang != "auto" and not language_available(args.lang):
         # Refused at startup rather than on the first spoken line: a speech
         # service that starts happily and then throws the first time she tries
         # to talk is far worse than one that will not start.
@@ -628,8 +830,15 @@ def main():
     DEFAULT_VOICE = args.voice
     ENGINE = args.engine
     VOICE_REF = args.voice_ref
+    VOICE_REF_TEXT = args.ref_text
+    VOICE_DESIGN = args.voice_design
+    QWEN_MODEL = args.qwen_model
     Handler.device = args.device
-    log.info("Engine: %s%s", ENGINE, f" (voice ref: {VOICE_REF})" if VOICE_REF else "")
+    if ENGINE == "qwen":
+        log.info("Engine: qwen %s (mode: %s)", QWEN_MODEL, qwen_mode())
+    else:
+        log.info("Engine: %s%s", ENGINE,
+                 f" (voice ref: {VOICE_REF})" if VOICE_REF else "")
     if args.preload:
         # Preload whichever engine is actually serving. This called
         # get_pipeline unconditionally, which imports kokoro — and kokoro is
@@ -638,6 +847,8 @@ def main():
         # ModuleNotFoundError before it ever bound a port.
         if ENGINE == "chatterbox":
             _chatterbox(args.device)
+        elif ENGINE == "qwen":
+            _qwen(args.device)
         else:
             get_pipeline(args.device, lang_for(DEFAULT_VOICE))
 

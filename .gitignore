@@ -53,6 +53,9 @@ tts/.venv/
 # A separate one again for evaluating Chatterbox: it pins torch 2.6.0 and
 # would downgrade the working Kokoro service's torch 2.13 if they shared.
 tts/.venv-chatterbox/
+# The MLX speech environment. Third engine, third virtualenv - mlx-audio
+# pulls no torch at all, and Chatterbox pins torch 2.6 against Kokoro's 2.14.
+tts/.venv-mlx/
 tts/.venv-f5/
 tts/*.log
 bakeoff.json
@@ -63,3 +66,6 @@ tts/acks/
 
 # Machine-specific notes for Claude — addresses, hosts, identifiers.
 CLAUDE.local.md
+
+# Local experiments and bake-off artifacts. Machine-specific, not a Pantheon feature.
+scratchpad/

@@ -104,3 +104,107 @@ on('remote', 'change', e => {
 });
 
 api('/api/security').then(d => { paint(d); paintHosts(d); paintTls(d); }).catch(() => {});
+
+
+/* Restart the panel itself.
+   The reply has to be sent BEFORE the process dies, so the server answers
+   first and boots itself a moment later; this then polls until the socket
+   answers again rather than guessing at a delay. launchd's KeepAlive is what
+   actually brings it back. */
+on('restart-panel', 'click', () => {
+  const note = document.getElementById('restart-note');
+  const btn = document.getElementById('restart-panel');
+  btn.disabled = true;
+  note.className = 'try-note';
+  note.textContent = 'Restarting…';
+  post('/api/panel/restart', {}).then(() => {
+    let tries = 0;
+    const probe = () => {
+      tries += 1;
+      fetch('/api/status', { headers: { 'Accept': 'application/json' } })
+        .then(r => {
+          if (!r.ok) throw new Error('not yet');
+          note.textContent = 'Back up. Reloading…';
+          setTimeout(() => location.reload(), 400);
+        })
+        .catch(() => {
+          if (tries > 40) {
+            note.className = 'try-note bad';
+            note.textContent = 'Did not come back after 20s — check the gui log.';
+            btn.disabled = false;
+            return;
+          }
+          setTimeout(probe, 500);
+        });
+    };
+    setTimeout(probe, 1500);
+  }).catch(() => {
+    /* The connection dropping IS the restart happening, so this is expected
+       rather than a failure — fall through to the same polling. */
+    setTimeout(() => location.reload(), 4000);
+  });
+});
+
+/* Accounts.
+   The table is rebuilt from the server's answer after every change rather
+   than patched in place: the server refuses some edits (removing the last
+   administrator, deleting yourself) and the only honest view of who exists is
+   the one it just sent back. */
+function paintUsers(d) {
+  const t = document.getElementById('users-table');
+  if (!t) return;
+  const me = d.me || '';
+  t.innerHTML = '<tr><th>Name</th><th>Role</th><th></th></tr>' +
+    (d.users || []).map(u => `<tr>
+      <td>${escapeHtml(u.name)}${u.name === me ? ' <span class="you">(you)</span>' : ''}</td>
+      <td>${u.role === 'admin' ? 'Administrator' : 'General User'}</td>
+      <td>${u.name === me ? ''
+        : `<button type="button" class="ghost del-user" data-name="${escapeHtml(u.name)}">Remove</button>`}</td>
+    </tr>`).join('');
+}
+
+function loadUsers() {
+  return api('/api/users').then(paintUsers).catch(() => {});
+}
+
+on('user-form', 'submit', e => {
+  e.preventDefault();
+  const note = document.getElementById('user-note');
+  const name = document.getElementById('u-name').value.trim();
+  const pass = document.getElementById('u-pass').value;
+  const role = document.getElementById('u-role').value;
+  note.className = 'try-note';
+  note.textContent = 'Saving…';
+  post('/api/users', { action: 'save', name, password: pass, role })
+    .then(r => {
+      if (!r.ok) {
+        note.className = 'try-note bad';
+        note.textContent = (r.data && r.data.error) || 'Could not save.';
+        return;
+      }
+      document.getElementById('u-pass').value = '';
+      note.textContent = `Saved ${name}.`;
+      paintUsers({ users: r.data.users, me: (r.data.me || '') });
+      loadUsers();
+    });
+});
+
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.del-user');
+  if (!btn) return;
+  const name = btn.dataset.name;
+  if (!confirm(`Remove the account "${name}"? They are signed out immediately.`)) return;
+  post('/api/users', { action: 'delete', name }).then(r => {
+    const note = document.getElementById('user-note');
+    if (!r.ok) {
+      note.className = 'try-note bad';
+      note.textContent = (r.data && r.data.error) || 'Could not remove.';
+      return;
+    }
+    note.className = 'try-note';
+    note.textContent = `Removed ${name}.`;
+    loadUsers();
+  });
+});
+
+loadUsers();

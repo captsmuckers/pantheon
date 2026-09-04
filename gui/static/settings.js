@@ -302,13 +302,34 @@ function extras(f) {
   if (f.name === 'TTS_LANG_CODE') {
     return `<div id="lang-state" class="lang-state"></div>`;
   }
+  /* Cloning needs a clip ON this machine, and this machine is headless — so
+     without an upload the whole Base mode is unreachable from a browser. The
+     file never becomes the setting directly: it is trimmed, normalised and
+     transcribed first, and what comes back fills the two fields for review. */
+  if (f.name === 'TTS_VOICE_REF') {
+    return `<div class="ref-upload">
+        <label class="ghost file-btn">Upload a clip
+          <input type="file" id="ref-file" accept="audio/*,video/*" hidden>
+        </label>
+        <label class="ref-start">start at
+          <input type="number" id="ref-start" value="0" min="0" step="1"> s
+        </label>
+        <span class="try-note" id="ref-note">10s is taken from the start
+          offset. Only the first 6s reaches the speaker encoder.</span>
+      </div>`;
+  }
   return '';
 }
 
 function currentVoiceAndLang() {
   const v = document.getElementById('f-TTS_VOICE');
   const l = document.getElementById('f-TTS_LANG_CODE');
-  return { voice: v ? v.value.trim() : '', lang: l ? l.value : 'auto' };
+  /* The voice description goes with them, unsaved. Under Qwen VoiceDesign it
+     IS the voice, so a Test that ignored it would preview the saved voice and
+     look like the box you just typed in did nothing. */
+  const d = document.getElementById('f-TTS_VOICE_DESIGN');
+  return { voice: v ? v.value.trim() : '', lang: l ? l.value : 'auto',
+           instruct: d ? d.value.trim() : '' };
 }
 
 /* Which languages the serving process can phonemise. Asked of the speech
@@ -374,7 +395,7 @@ document.addEventListener('click', e => {
   if (!btn) return;
 
   if (btn.id === 'try-voice') {
-    const { voice, lang } = currentVoiceAndLang();
+    const { voice, lang, instruct } = currentVoiceAndLang();
     const note = document.getElementById('try-note');
     const audio = document.getElementById('try-audio');
     btn.disabled = true;
@@ -383,7 +404,7 @@ document.addEventListener('click', e => {
     fetch('/api/tts/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Pantheon-CSRF': '1' },
-      body: JSON.stringify({ voice, lang })
+      body: JSON.stringify({ voice, lang, instruct })
     }).then(async r => {
       if (r.ok) {
         const url = URL.createObjectURL(await r.blob());
@@ -460,6 +481,49 @@ function loadVoices() {
   return api('/api/tts/voices').then(paintVoices).catch(() => {});
 }
 
+document.addEventListener('change', e => {
+  const input = e.target.closest('#ref-file');
+  if (!input || !input.files || !input.files.length) return;
+  const file = input.files[0];
+  const note = document.getElementById('ref-note');
+  const startEl = document.getElementById('ref-start');
+  const start = startEl ? (parseFloat(startEl.value) || 0) : 0;
+
+  note.className = 'try-note';
+  note.textContent = `Uploading ${file.name} (${(file.size / 1048576).toFixed(1)}MB), then transcribing…`;
+
+  /* Raw body, not multipart: the panel is a stdlib http.server and a
+     hand-rolled multipart parser there is a much bigger thing to get right
+     than this needs. The filename is a label, never a destination. */
+  fetch('/api/tts/voice-ref', {
+    method: 'POST',
+    headers: {
+      'X-Pantheon-CSRF': '1',
+      'X-Voice-Filename': file.name.replace(/[^\x20-\x7e]/g, '_'),
+      'X-Voice-Start': String(start),
+      'Content-Type': 'application/octet-stream'
+    },
+    body: file
+  }).then(r => r.json()).then(d => {
+    if (!d.ok) {
+      note.className = 'try-note bad';
+      note.textContent = d.error || 'Upload failed.';
+      return;
+    }
+    const ref = document.getElementById('f-TTS_VOICE_REF');
+    const txt = document.getElementById('f-TTS_VOICE_REF_TEXT');
+    if (ref) { ref.value = d.path; ref.dispatchEvent(new Event('input', { bubbles: true })); }
+    if (txt) { txt.value = d.transcript; txt.dispatchEvent(new Event('input', { bubbles: true })); }
+    note.className = d.note ? 'try-note warn' : 'try-note';
+    note.textContent = `${d.seconds}s saved to ${d.path}. `
+      + (d.transcript ? 'Transcript filled in — check it. ' : '')
+      + (d.note || '') + ' Press Save, then restart the speech service.';
+  }).catch(() => {
+    note.className = 'try-note bad';
+    note.textContent = 'Upload failed.';
+  }).finally(() => { input.value = ''; });
+});
+
 document.addEventListener('click', e => {
   const toggle = e.target.closest('#browse-voices');
   if (toggle) {
@@ -485,7 +549,21 @@ function load() {
   return api('/api/status').then(d => {
     BOT_NAME = (d.services && d.services.bot && d.services.bot.title) || 'the bot';
   }).catch(() => {}).then(() => api('/api/settings'))
-    .then(d => { render(d); recompute(); })
+    .then(d => {
+      /* The Voice page reuses this whole file, narrowed to the voice fields.
+         Presentation only — /api/settings has already filtered by role, so a
+         General User was never sent anything else to begin with. */
+      const host = document.getElementById('settings');
+      if (host && host.dataset.onlyVoice) {
+        const keep = new Set(['TTS_VOICE', 'TTS_VOICE_DESIGN', 'TTS_VOICE_REF',
+                              'TTS_VOICE_REF_TEXT', 'TTS_QWEN_MODEL']);
+        d = Object.assign({}, d, {
+          fields: (d.fields || []).filter(f => keep.has(f.name))
+        });
+        d.sections = [...new Set(d.fields.map(f => f.section))];
+      }
+      render(d); recompute();
+    })
     .then(loadLanguages);
 }
 load();

@@ -95,7 +95,13 @@ env_value() {
 # share one. Chatterbox pins torch 2.6 and Kokoro runs on 2.13, so each has its
 # own venv and the server is started from whichever matches.
 tts_python() {
-    if [ "$(env_value TTS_ENGINE kokoro)" = "chatterbox" ] \
+    engine="$(env_value TTS_ENGINE kokoro)"
+    # Qwen runs on MLX, which cannot share an environment with either of the
+    # others: mlx-audio pulls no torch at all, and Chatterbox pins torch 2.6
+    # against Kokoro's 2.14. Three engines, three venvs, one reason.
+    if [ "$engine" = "qwen" ] && [ -x "$ROOT/tts/.venv-mlx/bin/python" ]; then
+        echo "$ROOT/tts/.venv-mlx/bin/python"
+    elif [ "$engine" = "chatterbox" ] \
        && [ -x "$ROOT/tts/.venv-chatterbox/bin/python" ]; then
         echo "$ROOT/tts/.venv-chatterbox/bin/python"
     elif [ -x "$ROOT/tts/.venv/bin/python" ]; then
@@ -125,6 +131,28 @@ tts_args() {
         case "$ref" in /*) ;; *) ref="$ROOT/$ref" ;; esac
         printf -- " --voice-ref %s" "$ref"
     fi
+    [ "$engine" != "qwen" ] && return
+
+    # Qwen's checkpoint IS its mode, so this always goes on the command line.
+    printf -- " --qwen-model %s" \
+        "$(env_value TTS_QWEN_MODEL mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit)"
+    # NOT the free-text settings. tts_args' output is deliberately word-split
+    # by its callers ("$PYTHON" tts_server.py $ENGINE_ARGS), so a voice design
+    # like "a low, dry English woman" would arrive as eight arguments and
+    # argparse would take the first word. They go through the environment
+    # instead - see tts_exports.
+    return 0
+}
+
+# The free-text TTS settings, exported rather than passed as arguments.
+#
+# Call this WITHOUT command substitution - `tts_exports`, never `$(tts_exports)`
+# - or the exports land in a subshell and vanish. tts_server.py reads these as
+# the defaults for --voice-design and --ref-text, so a hand-run server with
+# explicit flags still wins.
+tts_exports() {
+    export ATHENA_TTS_VOICE_DESIGN="$(env_value TTS_VOICE_DESIGN "")"
+    export ATHENA_TTS_REF_TEXT="$(env_value TTS_VOICE_REF_TEXT "")"
 }
 
 # Stop a process politely before forcing it.

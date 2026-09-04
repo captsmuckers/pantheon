@@ -14,8 +14,13 @@ from __future__ import annotations
 
 import html
 
-NAV = (("/", "Status"), ("/settings", "Settings"),
-       ("/logs", "Logs"), ("/security", "Security"), ("/setup", "Setup"))
+# The nav, and who sees each entry. A General User gets Status and Voice; the
+# rest are administrator-only. This only draws the links — the server refuses
+# the routes regardless, so a friend typing /security by hand still gets a 403
+# rather than a page. Hiding them is courtesy, not the control.
+NAV = (("/", "Status", "user"), ("/voice", "Voice", "user"),
+       ("/settings", "Settings", "admin"), ("/logs", "Logs", "admin"),
+       ("/security", "Security", "admin"), ("/setup", "Setup", "admin"))
 
 
 # The project is Pantheon; the bot it runs is called whatever its operator
@@ -25,10 +30,12 @@ NAV = (("/", "Status"), ("/settings", "Settings"),
 PROJECT = "Pantheon"
 
 
-def _shell(title: str, here: str, body: str, script: str = "") -> str:
+def _shell(title: str, here: str, body: str, script: str = "",
+           role: str = "admin") -> str:
     nav = "".join(
         f'<a href="{href}" class="{"on" if href == here else ""}">{html.escape(label)}</a>'
-        for href, label in NAV)
+        for href, label, need in NAV
+        if role == "admin" or need == "user")
     return f"""<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -44,7 +51,7 @@ def _shell(title: str, here: str, body: str, script: str = "") -> str:
 </body></html>"""
 
 
-def status_page() -> str:
+def status_page(role: str = "admin") -> str:
     return _shell("Status", "/", """
 <section class="services" id="services">
   <p class="loading">Checking…</p>
@@ -200,6 +207,50 @@ def security_page() -> str:
      other computers</label>
   <p class="help" id="remote-help"></p>
 </section>
+
+<section class="panel">
+  <h3>Restart the panel</h3>
+  <p class="sub">Only needed after the code changes — new settings or new
+     dropdown choices are read from disk once, at startup, so a running panel
+     keeps serving the old ones and shows anything it does not recognise as
+     "not a listed choice". Changing a setting never needs this; the Speech and
+     Services pages restart the bot and the speech service themselves.</p>
+  <p class="sub">This page goes away for a few seconds and comes back on its
+     own. There is deliberately no Stop: nothing in a browser could start it
+     again.</p>
+  <button type="button" id="restart-panel" class="ghost">Restart panel</button>
+  <span class="try-note" id="restart-note"></span>
+</section>
+
+<section class="panel">
+  <h3>Accounts</h3>
+  <p class="sub">Administrators see and change everything. General Users get
+     the status page and the voice controls — they cannot reach settings,
+     security, setup, updates, or the logs, and the restriction is enforced by
+     the server, not by hiding buttons.</p>
+  <div id="users-state" class="state"></div>
+  <table class="users" id="users-table"></table>
+  <form id="user-form" autocomplete="off">
+    <div class="field">
+      <label for="u-name">Name</label>
+      <input type="text" id="u-name" spellcheck="false" placeholder="a friend">
+    </div>
+    <div class="field">
+      <label for="u-pass">Password</label>
+      <input type="password" id="u-pass" autocomplete="new-password"
+             placeholder="leave blank to keep the current one">
+    </div>
+    <div class="field">
+      <label for="u-role">Role</label>
+      <select id="u-role">
+        <option value="user">General User</option>
+        <option value="admin">Administrator</option>
+      </select>
+    </div>
+    <button type="submit" class="ghost">Save account</button>
+    <span class="try-note" id="user-note"></span>
+  </form>
+</section>
 """, "security.js")
 
 
@@ -228,8 +279,13 @@ def login_page() -> str:
   <h2>Sign in</h2>
   <form id="login-form" autocomplete="off">
     <div class="field">
+      <label for="username">Name</label>
+      <input type="text" id="username" autocomplete="username" autofocus
+             placeholder="admin">
+    </div>
+    <div class="field">
       <label for="password">Password</label>
-      <div class="reveal"><input type="password" id="password" autocomplete="current-password" autofocus>
+      <div class="reveal"><input type="password" id="password" autocomplete="current-password">
         <button type="button" class="eye" data-for="password" aria-label="Show">show</button></div>
     </div>
     <p class="error" id="login-error" hidden></p>
@@ -246,3 +302,45 @@ def error_page(code: int, message: str) -> str:
   <p>{html.escape(message)}</p>
   <p><a href="/">Back to the status page</a></p>
 </section>""")
+
+
+def forbidden_page() -> str:
+    """Shown when a General User asks for an administrator-only page.
+
+    A page rather than a bare 403 because this is reachable by typing a URL or
+    following an old bookmark, and "you are signed in, this is simply not for
+    you" is a different message from "you are signed out".
+    """
+    return _shell("Not for you", "/", """
+<section class="panel">
+  <h2>Administrators only</h2>
+  <p class="sub">You are signed in, but this section needs an administrator
+     account. The status page and the voice controls are yours.</p>
+  <p><a href="/">Back to the status page</a></p>
+</section>
+""", "")
+
+
+def voice_page(role: str = "admin") -> str:
+    """The voice controls on their own page, for people who get nothing else.
+
+    Renders from /api/settings exactly as the Settings page does — and that
+    endpoint already filters by role, so a General User's browser is only ever
+    sent the five voice fields. The data-only-voice marker narrows what an
+    ADMIN sees here to the same five, so the page means the same thing for
+    everyone looking at it.
+    """
+    return _shell("Voice", "/voice", """
+<section class="panel">
+  <h2>Voice</h2>
+  <p class="sub">How she sounds. Pick one of the built-in timbres, describe a
+     voice in words, or upload a clip to clone — which one applies depends on
+     the model chosen below. Test speaks a line in your browser; it is not
+     heard in Discord.</p>
+</section>
+<div id="settings" data-only-voice="1"><p class="loading">Loading…</p></div>
+<div class="save-bar">
+  <button type="button" id="save" class="primary">Save</button>
+  <span id="save-note" class="try-note"></span>
+</div>
+""", "settings.js", role)

@@ -543,6 +543,13 @@ WHISPER_COMPUTE = os.getenv("WHISPER_COMPUTE", "int8").strip() or "int8"
 TTS_ENABLED = _bool("TTS_ENABLED", False)
 TTS_URL = os.getenv("TTS_URL", "").strip() or "http://127.0.0.1:8085"
 TTS_VOICE = os.getenv("TTS_VOICE", "").strip() or "bf_emma"
+# Qwen3-TTS. The checkpoint name is the mode switch (Base / CustomVoice /
+# VoiceDesign), so these three are read together and only one of them applies
+# at a time; see schema.py for which goes with which.
+TTS_QWEN_MODEL = (os.getenv("TTS_QWEN_MODEL", "").strip()
+                  or "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit")
+TTS_VOICE_DESIGN = os.getenv("TTS_VOICE_DESIGN", "").strip()
+TTS_VOICE_REF_TEXT = os.getenv("TTS_VOICE_REF_TEXT", "").strip()
 # Playback goes into Discord's MICROPHONE cable, not its speaker: this is what
 # the channel hears. The return cable is the far side of the one the host
 # account's Discord reads as its microphone — and that account must be
