@@ -115,3 +115,23 @@ function escapeHtml(s) {
   paint();
   setInterval(paint, 15000);
 })();
+
+
+/* The theme picker. theme.js has already applied the stored choice before
+   paint; this only renders the current state and writes changes. */
+(function () {
+  const sel = document.getElementById('theme-pick');
+  if (!sel) return;
+  let saved = 'system';
+  try { saved = localStorage.getItem('pantheon-theme') || 'system'; } catch (e) {}
+  sel.value = saved;
+  sel.addEventListener('change', () => {
+    const v = sel.value;
+    try {
+      if (v === 'system') localStorage.removeItem('pantheon-theme');
+      else localStorage.setItem('pantheon-theme', v);
+    } catch (e) { toast('This browser is blocking storage; theme will not stick.'); }
+    if (v === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', v);
+  });
+})();

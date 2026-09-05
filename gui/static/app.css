@@ -5,14 +5,32 @@
   --bg: #14161a;      --panel: #1b1e24;   --edge: #2a2f38;
   --ink: #e6e9ef;     --dim: #9aa3b2;     --faint: #6b7382;
   --accent: #7aa2f7;  --good: #7bc47f;    --warn: #e0af68;  --bad: #e06c75;
+  color-scheme: dark;
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
 }
+/* Follow the OS only while no explicit choice has been made. Guarding on
+   [data-theme="dark"] is what lets someone pick dark on a light desktop and
+   keep it — an unguarded media query would win every time the OS says light. */
 @media (prefers-color-scheme: light) {
-  :root {
-    --bg: #f6f7f9;    --panel: #ffffff;   --edge: #dfe3ea;
-    --ink: #1b1e24;   --dim: #57606f;     --faint: #8b93a1;
-    --accent: #2f5fd0; --good: #2f8a3f;   --warn: #9a6b00;  --bad: #c0392b;
+  :root:not([data-theme="dark"]) {
+  --bg: #f6f7f9;    --panel: #ffffff;   --edge: #dfe3ea;
+  --ink: #1b1e24;   --dim: #57606f;     --faint: #8b93a1;
+  --accent: #2f5fd0; --good: #2f8a3f;   --warn: #9a6b00;  --bad: #c0392b;
+  color-scheme: light;
   }
+}
+/* Explicit choices, which must beat the media query in BOTH directions. */
+:root[data-theme="light"] {
+  --bg: #f6f7f9;    --panel: #ffffff;   --edge: #dfe3ea;
+  --ink: #1b1e24;   --dim: #57606f;     --faint: #8b93a1;
+  --accent: #2f5fd0; --good: #2f8a3f;   --warn: #9a6b00;  --bad: #c0392b;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --bg: #14161a;      --panel: #1b1e24;   --edge: #2a2f38;
+  --ink: #e6e9ef;     --dim: #9aa3b2;     --faint: #6b7382;
+  --accent: #7aa2f7;  --good: #7bc47f;    --warn: #e0af68;  --bad: #e06c75;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -368,3 +386,10 @@ main.centred .signin button.primary { width: 100%; }
           border-bottom: 1px solid var(--edge); }
 .labbar-warn { color: var(--warn); }
 .labbar-alone { opacity: .6; }
+
+/* ---- theme picker ---- */
+.theme-pick {
+  background: var(--bg); color: var(--dim); border: 1px solid var(--edge);
+  border-radius: 7px; font: inherit; font-size: .85rem; padding: .2rem 1.4rem .2rem .4rem;
+}
+.theme-pick:hover { color: var(--ink); }

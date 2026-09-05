@@ -50,8 +50,9 @@ def _shell(title: str, here: str, body: str, script: str = "",
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)} — {html.escape(PROJECT)}</title>
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/theme.js"></script>
 </head><body data-role="{html.escape(role)}">
-<header class="{'' if chrome else 'bare'}"><h1><span class="mark">◆</span> {html.escape(PROJECT)}</h1>{f'<nav>{nav}</nav>' if chrome else ''}{'<div class="who"><span id="whoami"></span><button type="button" id="signout" class="ghost">Sign out</button></div>' if chrome else ''}</header>
+<header class="{'' if chrome else 'bare'}"><h1><span class="mark">◆</span> {html.escape(PROJECT)}</h1>{f'<nav>{nav}</nav>' if chrome else ''}{'<div class="who"><span id="whoami"></span><select id="theme-pick" class="theme-pick" title="Colour theme"><option value="system">Theme: system</option><option value="light">Theme: light</option><option value="dark">Theme: dark</option></select><button type="button" id="signout" class="ghost">Sign out</button></div>' if chrome else ''}</header>
 {'<div id="labbar" class="labbar" hidden></div>' if chrome else ''}
 <main class="{'' if chrome else 'centred'}">{body}</main>
 <div id="toast" class="toast" hidden></div>
