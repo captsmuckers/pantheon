@@ -18,6 +18,10 @@
 # the kind of file that gets committed by an absent-minded `git add -A`.
 /idle.png
 /tts/voices/*.wav
+# ...and the transcript stored beside each clip. Both halves, or neither: a
+# voice reference is the recording AND the words in it, and tracking one
+# without the other publishes what somebody said while pretending not to.
+/tts/voices/*.json
 
 # Live OAuth tokens.
 .spotify-cache

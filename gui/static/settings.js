@@ -341,6 +341,41 @@ document.getElementById('settings-form').addEventListener('submit', e => {
    whatever is currently TYPED — not what is saved — so a voice can be judged
    before committing to it. The language gets a live report of which
    phonemisers are actually installed. */
+
+/* Saved voices, in Settings as well as the lab.
+   The same library and the same guarantee: selecting a clip fills its
+   transcript too. TTS_VOICE_REF on its own is a path box, and typing a path
+   into it while TTS_VOICE_REF_TEXT still holds another clip's words is
+   precisely the pairing that clones badly and reports nothing. */
+let REF_SAVED = [];
+
+function loadSavedRefs() {
+  const sel = document.getElementById('ref-saved');
+  if (!sel) return Promise.resolve();
+  return api('/api/tts/voice-refs').then(d => {
+    REF_SAVED = d.voices || [];
+    const cur = (document.getElementById('f-TTS_VOICE_REF') || {}).value || '';
+    sel.innerHTML = '<option value="">— none —</option>' + REF_SAVED.map(v =>
+      `<option value="${escapeHtml(v.path)}"${cur.endsWith(v.path) ? ' selected' : ''}>
+         ${escapeHtml(v.label)} · ${v.seconds}s${v.added_by ? ' · ' + escapeHtml(v.added_by) : ''}
+         ${v.needs_transcript ? ' · no transcript' : ''}</option>`).join('');
+  }).catch(() => {});
+}
+
+document.addEventListener('change', e => {
+  if (!e.target || e.target.id !== 'ref-saved') return;
+  const pick = REF_SAVED.find(v => v.path === e.target.value);
+  const ref = document.getElementById('f-TTS_VOICE_REF');
+  const txt = document.getElementById('f-TTS_VOICE_REF_TEXT');
+  if (!ref) return;
+  ref.value = pick ? pick.path : '';
+  ref.dispatchEvent(new Event('input', { bubbles: true }));
+  if (txt) {
+    txt.value = pick ? (pick.transcript || '') : '';
+    txt.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+});
+
 /* The Test control. Attached to whichever field IS the voice in a given mode,
    which is three different fields across the five modes — it used to hang off
    TTS_VOICE alone, so hiding that field in VoiceDesign mode silently took the
@@ -366,9 +401,6 @@ function extras(f) {
       + `<p class="help">Nothing here reaches Discord until you press Save and
          the bot restarts. Test only plays it in this browser.</p>`;
   }
-  if (f.name === 'TTS_VOICE_REF') {
-    return tryBlock('ref', 'Test this voice');
-  }
   if (f.name === 'TTS_LANG_CODE') {
     return `<div id="lang-state" class="lang-state"></div>`;
   }
@@ -377,8 +409,15 @@ function extras(f) {
      file never becomes the setting directly: it is trimmed, normalised and
      transcribed first, and what comes back fills the two fields for review. */
   if (f.name === 'TTS_VOICE_REF') {
-    return `<div class="ref-upload">
-        <label class="ghost file-btn">Upload a clip
+    return `<div class="field">
+        <label for="ref-saved">Saved voices</label>
+        <select id="ref-saved"><option value="">— loading —</option></select>
+        <p class="help">Choosing one fills in both this and the transcript
+           below. They are stored together, so an older clip can never end up
+           paired with a newer clip's words.</p>
+      </div>
+      <div class="ref-upload">
+        <label class="ghost file-btn">Upload a new clip
           <input type="file" id="ref-file" accept="audio/*,video/*" hidden>
         </label>
         <label class="ref-start">start at
@@ -386,7 +425,8 @@ function extras(f) {
         </label>
         <span class="try-note" id="ref-note">10s is taken from the start
           offset. Only the first 6s reaches the speaker encoder.</span>
-      </div>`;
+      </div>`
+      + tryBlock('ref', 'Test this voice');
   }
   return '';
 }
@@ -621,7 +661,7 @@ function load() {
     BOT_NAME = (d.services && d.services.bot && d.services.bot.title) || 'the bot';
   }).catch(() => {}).then(() => api('/api/settings'))
     .then(d => {
-      render(d); recompute(); applyRelevance();
+      render(d); recompute(); applyRelevance(); loadSavedRefs();
     })
     .then(loadLanguages);
 }
