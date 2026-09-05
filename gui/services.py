@@ -423,6 +423,15 @@ VOICES_DIR = ROOT / "tts" / "voices"
 # references embed slowly and stop adding anything, so this is a practical
 # ceiling with room to spare over the ~48s that measured well.
 REF_MAX_SECONDS = 90
+
+# An upload is a CANDIDATE until somebody saves it. Prefixed rather than kept
+# in a subdirectory so the voices server's _safe_ref check — which only accepts
+# files sitting directly in this directory — keeps working unchanged, and a
+# pending clip can still be auditioned before anyone commits to it.
+#
+# This exists because uploading used to save immediately, so every bad take and
+# failed clone became a permanent library entry that had to be deleted by hand.
+PENDING = "pending--"
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
 
 
@@ -474,6 +483,8 @@ def voice_refs() -> dict:
     VOICES_DIR.mkdir(parents=True, exist_ok=True)
     out = []
     for wav in sorted(VOICES_DIR.glob("*.wav")):
+        if wav.name.startswith(PENDING):
+            continue
         meta = {}
         side = _sidecar(wav)
         if side.exists():
@@ -498,6 +509,65 @@ def voice_refs() -> dict:
             "needs_transcript": not meta.get("transcript"),
         })
     return {"voices": out, "count": len(out)}
+
+
+def _sweep_pending(max_age_hours: float = 6.0) -> None:
+    """Delete candidates nobody saved. They are auditions, not files."""
+    import time as _t
+    cutoff = _t.time() - max_age_hours * 3600
+    for f in VOICES_DIR.glob(f"{PENDING}*"):
+        try:
+            if f.stat().st_mtime < cutoff:
+                f.unlink()
+        except OSError:
+            pass
+
+
+def commit_voice_ref(pending: str, label: str, added_by: str = "",
+                     transcript: str = "") -> dict:
+    """Promote a candidate into the library under a name of its own.
+
+    The name a person typed becomes both the label and the filename, so the
+    library reads as a list of voices rather than a list of uploads.
+    """
+    import datetime
+    import re as _re
+
+    src = VOICES_DIR / Path(pending).name
+    if not src.exists() or not src.name.startswith(PENDING):
+        return {"ok": False, "error": "That upload is no longer around. "
+                                      "Choose the file again."}
+    stem = _SAFE_NAME.sub("_", (label or "").strip()).strip("._-")[:48]
+    if not stem:
+        stem = src.name[len(PENDING):-4] or "voice"
+    dest = VOICES_DIR / f"{stem}.wav"
+    n = 2
+    while dest.exists():
+        dest = VOICES_DIR / f"{stem}-{n}.wav"
+        n += 1
+    try:
+        src.replace(dest)
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not save it: {exc}"}
+    _sidecar(dest).write_text(json.dumps({
+        "transcript": transcript,
+        "label": (label or dest.stem).strip(),
+        "added_by": added_by,
+        "added": datetime.date.today().isoformat(),
+    }, indent=2), "utf-8")
+    return {"ok": True, "name": dest.stem,
+            "path": str(dest.relative_to(ROOT)), **voice_refs()}
+
+
+def discard_voice_ref(pending: str) -> dict:
+    """Throw a candidate away without saving it."""
+    f = VOICES_DIR / Path(pending).name
+    if f.name.startswith(PENDING) and f.exists():
+        try:
+            f.unlink()
+        except OSError:
+            pass
+    return {"ok": True, **voice_refs()}
 
 
 def describe_voice_ref(name: str) -> dict:
@@ -558,7 +628,8 @@ def save_voice_ref(data: bytes, filename: str, start: float = 0.0,
         return {"ok": False, "error": "ffmpeg not found; brew install ffmpeg"}
 
     VOICES_DIR.mkdir(parents=True, exist_ok=True)
-    out_name = _voice_ref_name(filename)
+    _sweep_pending()
+    out_name = PENDING + _voice_ref_name(filename)
     out_path = VOICES_DIR / out_name
     # Adding, not replacing. Several people uploading "voice.wav" would
     # otherwise silently overwrite each other, and the loser would have no way
@@ -590,30 +661,30 @@ def save_voice_ref(data: bytes, filename: str, start: float = 0.0,
             return {"ok": False,
                     "error": f"Only {seconds:.1f}s of audio at that start point. "
                              "Try a smaller start offset."}
-        # No transcribing by default. Supplying a transcript switches Qwen to
-        # its in-context path (use_icl = ref_audio and ref_text), which is a
-        # DIFFERENT mechanism from speaker-embedding cloning — and measured
-        # here, the embedding path matched the source better and ran 2.5x
-        # faster. So the clip alone is the normal case; a transcript is a
-        # thing you add deliberately, not a step everyone waits through.
-        text = ""
+        # Transcribed, because the transcript is what unlocks Qwen's
+        # in-context path — use_icl = ref_audio and ref_text, both or neither.
+        #
+        # I had this off for a while, on the strength of cloning af_bella: a
+        # synthetic voice with no rasp, accent or breathiness, where both
+        # mechanisms measured the same and sounded identical. That was the one
+        # case that cannot distinguish them. On a real voice it is stark — a
+        # Gilbert Gottfried clip cloned embedding-only lost 5.3dB of energy
+        # above 4kHz against its source, which is exactly where rasp lives,
+        # and the user's report was that it "removed all the raspiness".
+        # In-context lost only 2dB.
+        text = transcribe(out_path)
         note = ""
         if seconds < 5:
             note = ("Under 5s. Short references clone poorly — 20 to 60 seconds "
                     "of clear speech works much better.")
         elif seconds < 15:
             note = "Usable, but 20 to 60 seconds gives the model more to work from."
-        import datetime
-        _sidecar(out_path).write_text(json.dumps({
-            "transcript": text,
-            "label": label or out_path.stem.replace("_", " "),
-            "added_by": added_by,
-            "added": datetime.date.today().isoformat(),
-        }, indent=2), "utf-8")
+        # Nothing is written beside a candidate: a sidecar would make it look
+        # like a library entry to anything that scans the directory.
         return {"ok": True,
-                "name": out_path.stem,
+                "pending": out_path.name,
                 "path": str(out_path.relative_to(ROOT)),
-                "transcript": text,
+                "label": label,
                 "seconds": round(seconds, 1),
                 "note": note,
                 **voice_refs()}

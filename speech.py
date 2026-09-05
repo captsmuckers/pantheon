@@ -530,7 +530,8 @@ class Speaker:
             await asyncio.sleep(config.TTS_ECHO_GUARD_MS / 1000)
             self._speaking.clear()
 
-    async def say_as(self, text: str, ref_audio: str) -> str:
+    async def say_as(self, text: str, ref_audio: str,
+                     ref_text: str = "") -> str:
         """Speak one line in a saved voice. Returns "" or why it could not.
 
         Goes to the VOICES service, not the speech service: those two usually
@@ -548,12 +549,18 @@ class Speaker:
             return "There is nothing there to say."
         try:
             async with httpx.AsyncClient(timeout=config.TTS_TIMEOUT) as client:
-                r = await client.post(
-                    f"{config.VOICES_URL}/synthesize",
-                    # No ref_text: supplying one switches Qwen to its
-                    # in-context path, which measured further from the source
-                    # and 2.5x slower than plain speaker-embedding cloning.
-                    json={"text": speakable, "ref_audio": ref_audio})
+                # WITH the transcript, deliberately. That puts Qwen in its
+                # in-context mode, which keeps the texture of a voice — rasp,
+                # accent, breathiness — that a speaker embedding smooths away.
+                # It costs about 4 seconds a line, and /tts is a command
+                # somebody typed and is waiting on, so the trade is the right
+                # way round here. Her own replies take the fast path instead:
+                # see _speak_one, and TTS_VOICE_REF_TEXT being empty.
+                payload = {"text": speakable, "ref_audio": ref_audio}
+                if ref_text:
+                    payload["ref_text"] = ref_text
+                r = await client.post(f"{config.VOICES_URL}/synthesize",
+                                      json=payload)
                 r.raise_for_status()
                 payload = r.content
         except Exception as exc:
@@ -809,11 +816,11 @@ async def say(text: str) -> None:
         await _speaker.say(text)
 
 
-async def say_as(text: str, ref_audio: str) -> str:
+async def say_as(text: str, ref_audio: str, ref_text: str = "") -> str:
     """Speak in a saved voice. Returns "" on success, else what went wrong."""
     if _speaker is None:
         return "Speech is switched off."
-    return await _speaker.say_as(text, ref_audio)
+    return await _speaker.say_as(text, ref_audio, ref_text)
 
 
 def saved_voices() -> list:
@@ -835,7 +842,13 @@ def saved_voices() -> list:
                     label = _json.loads(side.read_text("utf-8")).get("label") or label
                 except Exception:
                     pass
-            out.append((wav.stem, label, str(wav)))
+            text = ""
+            if side.exists():
+                try:
+                    text = _json.loads(side.read_text("utf-8")).get("transcript", "")
+                except Exception:
+                    pass
+            out.append((wav.stem, label, str(wav), text))
     except Exception:
         log.warning("Could not read the voice library", exc_info=True)
     return out

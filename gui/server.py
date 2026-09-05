@@ -657,6 +657,15 @@ class Handler(BaseHTTPRequestHandler):
         if action == "transcribe":
             self._json(200, services.describe_voice_ref(name))
             return
+        if action == "commit":
+            self._json(200, services.commit_voice_ref(
+                str(body.get("pending", "")), str(body.get("label", "")),
+                self._session().get("user", ""),
+                str(body.get("transcript", ""))))
+            return
+        if action == "discard":
+            self._json(200, services.discard_voice_ref(str(body.get("pending", ""))))
+            return
         self._json(400, {"ok": False, "error": "Unknown action."})
 
     def _voice_ref(self):

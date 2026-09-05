@@ -90,13 +90,20 @@ function controls() {
          old voice never gets a newer voice's transcript.</p></div>
       <div class="field"><label>Or add a new one</label>
       <div class="ref-upload">
-        <label class="ref-name">call it
+        <label class="ref-name">1. Name it
           <input type="text" id="lab-label" placeholder="Ray" maxlength="48"></label>
         <label class="ref-start">start at
           <input type="number" id="lab-start" value="0" min="0" step="1"> s</label>
-        <label class="ghost file-btn">Choose a recording
+        <label class="ghost file-btn">2. Upload a sample file
           <input type="file" id="lab-file" accept="audio/*,video/*" hidden></label>
         <span class="try-note" id="lab-upnote"></span>
+      </div>
+      <div id="lab-pending" hidden>
+        <p class="help warn">Not saved yet. Press Test to hear it, then Save to
+           keep it — or upload a different take. Nothing reaches the library
+           until you save, so bad reads and failed clones do not pile up.</p>
+        <button type="button" id="lab-save" class="primary">Save to library</button>
+        <button type="button" id="lab-discard" class="ghost">Discard</button>
       </div>
       <p class="help">Trimmed to 10 seconds, levelled and transcribed for you.
          One speaker, no music, in the tone you want back.</p>
@@ -140,6 +147,8 @@ function loadVoices() {
    one fills BOTH fields; there is no way to select a clip and inherit the
    wrong words. */
 let SAVED = [];
+let PENDING = '';        // an uploaded candidate awaiting Save, if any
+let PENDING_TEXT = '';   // and what is said in it
 
 function loadSaved() {
   return api('/api/tts/voice-refs').then(d => {
@@ -184,12 +193,46 @@ document.addEventListener('change', e => {
 });
 
 document.addEventListener('click', e => {
-  const b = e.target.closest('#lab-transcribe');
-  if (!b) return;
+  const b = e.target.closest('#lab-save, #lab-discard');
+  if (b) {
+    const note = document.getElementById('lab-upnote');
+    const box = document.getElementById('lab-pending');
+    if (b.id === 'lab-discard') {
+      post('/api/tts/voice-refs', { action: 'discard', pending: PENDING })
+        .then(() => { PENDING=''; box.hidden = true;
+                      note.textContent = 'Discarded. Nothing was saved.'; });
+      return;
+    }
+    const label = (document.getElementById('lab-label') || {}).value.trim();
+    if (!label) {
+      note.className = 'try-note bad';
+      note.textContent = 'Give it a name first.';
+      return;
+    }
+    b.disabled = true;
+    post('/api/tts/voice-refs', { action: 'commit', pending: PENDING,
+                                  label, transcript: PENDING_TEXT })
+      .then(r => {
+        b.disabled = false;
+        if (!r.ok) { note.className='try-note bad';
+                     note.textContent=(r.data&&r.data.error)||'Could not save.'; return; }
+        PENDING=''; box.hidden = true;
+        note.className = 'try-note';
+        note.textContent = `Saved as "${r.data.name}". Athena is unchanged `
+                         + 'until you press Apply.';
+        loadSaved().then(() => {
+          const sel = document.getElementById('lab-saved');
+          if (sel) { sel.value = r.data.path; syncSaved(); }
+        });
+      });
+    return;
+  }
+  const b2 = e.target.closest('#lab-transcribe');
+  if (!b2) return;
   const sel = document.getElementById('lab-saved');
   const pick = SAVED.find(v => v.path === sel.value);
   if (!pick) return;
-  b.disabled = true; b.textContent = 'Listening…';
+  b2.disabled = true; b2.textContent = 'Listening…';
   post('/api/tts/voice-refs', { action: 'transcribe', name: pick.name + '.wav' })
     .then(() => loadSaved());
 });
@@ -344,13 +387,20 @@ document.addEventListener('change', e => {
       note.textContent = d.error || 'Upload failed.';
       return;
     }
-    SAVED = d.voices || SAVED;
-    note.textContent = `${d.seconds}s saved as "${d.name}". ${d.note || ''} `
-                     + 'It is in Saved voices now. Press Test to hear it.';
-    loadSaved().then(() => {
-      const sel = document.getElementById('lab-saved');
-      if (sel) { sel.value = d.path; syncSaved(); }
-    });
+    /* A candidate, not a library entry. It is wired into the ref fields so
+       Test plays THIS upload, but nothing is written until Save. */
+    PENDING = d.pending;
+    PENDING_TEXT = d.transcript || '';
+    document.getElementById('lab-ref').value = d.path;
+    /* Carried so Test uses the SAME mechanism the saved voice will: with a
+       transcript, Qwen clones in-context and keeps voice texture; without, it
+       reduces the clip to a speaker embedding and smooths rasp away. Testing
+       one and saving the other would be a preview that lies. */
+    document.getElementById('lab-reftext').value = PENDING_TEXT;
+    const box = document.getElementById('lab-pending');
+    if (box) box.hidden = false;
+    note.className = 'try-note';
+    note.textContent = `${d.seconds}s ready. ${d.note || ''} Press Test to hear it.`;
   }).catch(() => {
     note.className = 'try-note bad';
     note.textContent = 'Upload failed.';
