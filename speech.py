@@ -26,6 +26,8 @@ importing this module there must not raise.
 from __future__ import annotations
 
 import asyncio
+import os
+from pathlib import Path
 import io
 import logging
 import random
@@ -34,6 +36,8 @@ import threading
 import wave
 
 import config
+
+ROOT = Path(__file__).resolve().parent
 
 log = logging.getLogger("athena.speech")
 
@@ -526,6 +530,51 @@ class Speaker:
             await asyncio.sleep(config.TTS_ECHO_GUARD_MS / 1000)
             self._speaking.clear()
 
+    async def say_as(self, text: str, ref_audio: str) -> str:
+        """Speak one line in a saved voice. Returns "" or why it could not.
+
+        Goes to the VOICES service, not the speech service: those two usually
+        run different engines — she may be Kokoro while the library is Qwen
+        clones — and only the voices one can clone. Synthesised and played
+        inline rather than queued, because this is somebody typing a command
+        and waiting, not a reply competing with her own speech.
+        """
+        import httpx
+
+        if not config.VOICES_ENABLED:
+            return "Saved voices are switched off."
+        speakable = sanitize_for_speech(text)
+        if not speakable:
+            return "There is nothing there to say."
+        try:
+            async with httpx.AsyncClient(timeout=config.TTS_TIMEOUT) as client:
+                r = await client.post(
+                    f"{config.VOICES_URL}/synthesize",
+                    # No ref_text: supplying one switches Qwen to its
+                    # in-context path, which measured further from the source
+                    # and 2.5x slower than plain speaker-embedding cloning.
+                    json={"text": speakable, "ref_audio": ref_audio})
+                r.raise_for_status()
+                payload = r.content
+        except Exception as exc:
+            log.warning("Voices service unavailable (%s)", exc.__class__.__name__)
+            return ("The voices service is not answering. It may need starting "
+                    "from the control panel.")
+
+        mono, rate = await asyncio.to_thread(decode_wav, payload)
+        audio = await asyncio.to_thread(resample, mono, rate, self._rate)
+        audio = await asyncio.to_thread(normalize, audio)
+        stereo = np.column_stack([audio, audio])
+        self._interrupt.clear()
+        self._speaking.set()
+        try:
+            await asyncio.to_thread(self._play, stereo)
+            log.info("spoke as %s: %r", os.path.basename(ref_audio), speakable[:60])
+        finally:
+            await asyncio.sleep(config.TTS_ECHO_GUARD_MS / 1000)
+            self._speaking.clear()
+        return ""
+
     # ---- acknowledgements -------------------------------------------
     #
     # Rendered once, cached on disk, held in memory as the exact float array
@@ -758,6 +807,38 @@ def silence() -> str:
 async def say(text: str) -> None:
     if _speaker is not None:
         await _speaker.say(text)
+
+
+async def say_as(text: str, ref_audio: str) -> str:
+    """Speak in a saved voice. Returns "" on success, else what went wrong."""
+    if _speaker is None:
+        return "Speech is switched off."
+    return await _speaker.say_as(text, ref_audio)
+
+
+def saved_voices() -> list:
+    """The voice library, as (name, label, path). Read fresh every time.
+
+    Not cached: somebody adds a voice in the panel and expects /voices to show
+    it without the bot being restarted.
+    """
+    import json as _json
+
+    out = []
+    d = ROOT / "tts" / "voices" if "ROOT" in globals() else Path("tts/voices")
+    try:
+        for wav in sorted(Path(d).glob("*.wav")):
+            label = wav.stem.replace("_", " ")
+            side = wav.with_suffix(".json")
+            if side.exists():
+                try:
+                    label = _json.loads(side.read_text("utf-8")).get("label") or label
+                except Exception:
+                    pass
+            out.append((wav.stem, label, str(wav)))
+    except Exception:
+        log.warning("Could not read the voice library", exc_info=True)
+    return out
 
 
 async def ack() -> None:

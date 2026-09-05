@@ -72,10 +72,10 @@ PLIST
 # agent loaded. Polling until the label is gone is the fix; the sleep is not
 # decoration.
 unload() {
-    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.streamaudio; do
+    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.streamaudio com.athena.voices; do
         launchctl bootout "gui/$UID_NUM/$label" 2>/dev/null || true
     done
-    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.streamaudio; do
+    for label in com.athena.bot com.athena.tts com.athena.gui com.athena.streamaudio com.athena.voices; do
         i=0
         while launchctl print "gui/$UID_NUM/$label" >/dev/null 2>&1; do
             sleep 0.5
@@ -91,7 +91,8 @@ unload() {
 if [[ "${1:-}" == "--uninstall" ]]; then
     unload
     rm -f "$AGENTS/com.athena.bot.plist" "$AGENTS/com.athena.tts.plist" \
-          "$AGENTS/com.athena.gui.plist" "$AGENTS/com.athena.streamaudio.plist"
+          "$AGENTS/com.athena.gui.plist" "$AGENTS/com.athena.streamaudio.plist" \
+          "$AGENTS/com.athena.voices.plist"
     echo "Removed. Athena will not start at login."
     exit 0
 fi
@@ -109,6 +110,12 @@ plist_for com.athena.bot    launchd-athena.sh athena > "$AGENTS/com.athena.bot.p
 # start everything else, and needing physical access to start the thing that
 # gives you remote access defeats the point of it.
 plist_for com.athena.gui    start-gui.sh      gui    > "$AGENTS/com.athena.gui.plist"
+# The voices service, only when it is switched on. A second speech model is
+# ~6GB resident, so it is not started for people who never use /tts.
+if [ "$(env_value VOICES_ENABLED false)" = "true" ]; then
+    plist_for com.athena.voices launchd-voices.sh voices > "$AGENTS/com.athena.voices.plist"
+    echo "  $AGENTS/com.athena.voices.plist"
+fi
 echo "Wrote:"
 echo "  $AGENTS/com.athena.tts.plist"
 echo "  $AGENTS/com.athena.bot.plist"
@@ -146,6 +153,7 @@ STREAMPLIST
 fi
 
 LABELS="com.athena.tts com.athena.bot com.athena.gui"
+[ -f "$AGENTS/com.athena.voices.plist" ] && LABELS="$LABELS com.athena.voices"
 [ -f "$AGENTS/com.athena.streamaudio.plist" ] && LABELS="$LABELS com.athena.streamaudio"
 for label in $LABELS; do
     i=0

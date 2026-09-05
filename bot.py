@@ -735,6 +735,61 @@ async def _followup(interaction: discord.Interaction, result) -> None:
     await interaction.followup.send(str(result)[:1900])
 
 
+@bot.tree.command(name="voices", description="List the saved voices /tts can use")
+async def slash_voices(interaction: discord.Interaction):
+    if not await _guard(interaction):
+        return
+    voices = speech.saved_voices()
+    if not voices:
+        await interaction.response.send_message(
+            "No saved voices yet. Add one in the control panel's voice lab.")
+        return
+    lines = "\n".join(f"`{name}` — {label}" for name, label, _ in voices)
+    await interaction.response.send_message(
+        f"**Saved voices** ({len(voices)})\n{lines}\n\n"
+        f"Use `/tts <voice> <phrase>`.")
+
+
+async def _voice_choices(interaction: discord.Interaction, current: str):
+    """Autocomplete from the live library.
+
+    Read per keystroke rather than cached, so a voice added in the panel is
+    offered immediately without restarting the bot. Discord caps this at 25.
+    """
+    current = (current or "").lower()
+    out = []
+    for name, label, _ in speech.saved_voices():
+        if current in name.lower() or current in label.lower():
+            out.append(discord.app_commands.Choice(name=label[:100], value=name))
+        if len(out) >= 25:
+            break
+    return out
+
+
+@bot.tree.command(name="tts", description="Say something in one of the saved voices")
+@discord.app_commands.autocomplete(voice=_voice_choices)
+async def slash_tts(interaction: discord.Interaction, voice: str, phrase: str):
+    """Deliberately open to everyone in the channel — it is a toy, and the
+    channel is already trusted enough to control playback.
+
+    The voice is matched against the library rather than used as a path: this
+    argument comes from a person typing, and the only thing it may ever select
+    is a clip already saved here.
+    """
+    if not await _guard(interaction):
+        return
+    await interaction.response.defer()
+    match = next((v for v in speech.saved_voices()
+                  if v[0].lower() == voice.lower().strip()), None)
+    if match is None:
+        known = ", ".join(f"`{n}`" for n, _, _ in speech.saved_voices()[:12]) or "none saved"
+        await _followup(interaction, f"No saved voice called `{voice}`. Try: {known}")
+        return
+    problem = await speech.say_as(phrase, match[2])
+    await _followup(interaction,
+                    problem or f"*{match[1]}:* {phrase}")
+
+
 @bot.tree.command(name="play", description="Play a movie or episode right now")
 async def slash_play(interaction: discord.Interaction, query: str):
     if not await _guard(interaction):

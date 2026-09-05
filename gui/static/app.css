@@ -330,3 +330,5 @@ main.centred { display: flex; align-items: flex-start; justify-content: center;
 main.centred .panel.narrow { width: min(24rem, 92vw); margin: 0; }
 main.centred .signin h2 { text-align: center; margin-top: 0; }
 main.centred .signin button.primary { width: 100%; }
+.ref-upload .ref-name { display: inline-flex; align-items: center; gap: .3rem; }
+.ref-upload .ref-name input { width: 9rem; }

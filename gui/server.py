@@ -132,7 +132,8 @@ USER_PATHS = frozenset({
     "/", "/voice",                 # status, and the voice page
     "/api/status", "/api/logout",
     "/api/tts/voices", "/api/tts/preview", "/api/tts/voice-ref",
-    "/api/tts/health", "/api/tts/voice-refs",
+    "/api/tts/health", "/api/tts/voice-refs", "/api/voices/health",
+    "/api/voices/preview",
     "/api/settings",               # FILTERED by role - see _settings_for_role
     "/api/service",                # RESTRICTED to bot/tts restart - see _service
 })
@@ -451,6 +452,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, services.tts_health())
         elif path == "/api/tts/voice-refs":
             self._json(200, services.voice_refs())
+        elif path == "/api/voices/health":
+            self._json(200, services.voices_health())
         else:
             self._fail(404, "No such page.")
 
@@ -479,6 +482,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(code, payload, extra)
         elif path == "/api/tts/preview":
             self._preview(body)
+        elif path == "/api/voices/preview":
+            self._preview(body, voices=True)
         elif path == "/api/tts/voice-ref":
             self._voice_ref()
         elif path == "/api/tts/voice-refs":
@@ -591,12 +596,15 @@ class Handler(BaseHTTPRequestHandler):
         prefs.save(p)
         self._json(200, {"ok": True, "users": prefs.list_users(p)})
 
-    def _preview(self, body: dict):
+    def _preview(self, body: dict, voices: bool = False):
         """Speak a line with an unsaved voice, so it can be judged before saving."""
         wav, error = services.preview(str(body.get("voice") or ""),
                                       str(body.get("lang") or "auto"),
                                       str(body.get("text") or ""),
-                                      str(body.get("instruct") or ""))
+                                      str(body.get("instruct") or ""),
+                                      str(body.get("ref_audio") or ""),
+                                      str(body.get("ref_text") or ""),
+                                      voices=voices)
         if error is not None:
             self._json(409 if error.get("needs") else 502, {"ok": False, **error})
             return

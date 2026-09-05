@@ -90,10 +90,12 @@ function controls() {
          old voice never gets a newer voice's transcript.</p></div>
       <div class="field"><label>Or add a new one</label>
       <div class="ref-upload">
-        <label class="ghost file-btn">Upload a clip
-          <input type="file" id="lab-file" accept="audio/*,video/*" hidden></label>
+        <label class="ref-name">call it
+          <input type="text" id="lab-label" placeholder="Ray" maxlength="48"></label>
         <label class="ref-start">start at
           <input type="number" id="lab-start" value="0" min="0" step="1"> s</label>
+        <label class="ghost file-btn">Choose a recording
+          <input type="file" id="lab-file" accept="audio/*,video/*" hidden></label>
         <span class="try-note" id="lab-upnote"></span>
       </div>
       <p class="help">Trimmed to 10 seconds, levelled and transcribed for you.
@@ -235,7 +237,7 @@ function waitReady(seconds) {
 function refreshLive() {
   return api('/api/status').then(d => {
     LIVE = (d.probes && d.probes.tts && d.probes.tts.detail) || LIVE;
-  }).catch(() => {}).then(() => api('/api/tts/health').catch(() => null))
+  }).catch(() => {}).then(() => api('/api/voices/health').catch(() => null))
     .then(h => { if (h) LIVE = Object.assign({}, LIVE, h); paintLive(); });
 }
 
@@ -257,11 +259,17 @@ document.addEventListener('click', e => {
     btn.disabled = true;
     note.className = 'try-note';
     note.textContent = 'Speaking…';
-    fetch('/api/tts/preview', {
+    fetch('/api/voices/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Pantheon-CSRF': '1' },
+      /* The reference goes with the request. It used to be left out, so Test
+         in cloning mode played whatever clip the service had loaded at
+         startup — upload a new voice, press Test, hear the old one, with
+         nothing to suggest the upload had not taken. */
       body: JSON.stringify({ voice: p.TTS_VOICE || '', lang: 'auto',
                              instruct: p.TTS_VOICE_DESIGN || '',
+                             ref_audio: p.TTS_VOICE_REF || '',
+                             ref_text: p.TTS_VOICE_REF_TEXT || '',
                              text: document.getElementById('lab-text').value })
     }).then(async r => {
       if (!r.ok) {
@@ -327,6 +335,7 @@ document.addEventListener('change', e => {
     method: 'POST',
     headers: { 'X-Pantheon-CSRF': '1', 'Content-Type': 'application/octet-stream',
                'X-Voice-Filename': file.name.replace(/[^\x20-\x7e]/g, '_'),
+               'X-Voice-Label': (document.getElementById('lab-label') || {}).value || '',
                'X-Voice-Start': String(start) },
     body: file
   }).then(r => r.json()).then(d => {

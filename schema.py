@@ -338,6 +338,35 @@ SETTINGS: tuple[Setting, ...] = (
             "noticeably better when it has both the audio and the words; "
             "leaving this blank still works, it just sounds less like the "
             "original and nothing warns you."),
+    # ---- the voices service -----------------------------------------
+    #
+    # A SECOND speech service, existing for one reason: Athena's own voice and
+    # the saved voices are usually different engines. She speaks with Kokoro
+    # af_bella; the library is Qwen clones. One process cannot serve both, so
+    # /tts gets its own, pinned to the cloning checkpoint.
+    #
+    # Its reference clip is per request, so this one process can speak as any
+    # saved voice with no reload — which is why the library scales to as many
+    # voices as people care to add without costing anything more.
+    _s("VOICES_ENABLED", "bool", default=False, section="Speech", restart="bot",
+       help="Let anyone in the channel use /tts <voice> <phrase> to have her "
+            "say something in one of the saved voices. Needs the voices "
+            "service running, which is a second speech model in memory "
+            "(about 6GB) — it is started and stopped from the Services page."),
+    _s("VOICES_URL", "str", default="http://127.0.0.1:8087", section="Speech",
+       restart="bot", advanced=True,
+       help="Where the voices service listens. Separate from the speech "
+            "service so the two can run different engines at once."),
+    _s("VOICES_MODEL", "choice",
+       default="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+       choices=("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
+                "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"),
+       choice_labels=("Clone a voice from a recording  (better quality)",
+                      "Clone a voice from a recording  (faster)"),
+       section="Speech", restart="tts", advanced=True,
+       help="Which cloning model the voices service loads. Only cloning "
+            "checkpoints are offered: the whole point of this service is to "
+            "speak as any saved recording, and the other kinds cannot."),
     # The bot, not the speech service: it sends the voice name on every
     # synthesize call, and the server only falls back to its own --voice when
     # a request omits one. Restarting the speech service therefore changes

@@ -550,6 +550,15 @@ TTS_QWEN_MODEL = (os.getenv("TTS_QWEN_MODEL", "").strip()
                   or "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit")
 TTS_VOICE_DESIGN = os.getenv("TTS_VOICE_DESIGN", "").strip()
 TTS_VOICE_REF_TEXT = os.getenv("TTS_VOICE_REF_TEXT", "").strip()
+
+# The voices service: a second speech process pinned to a cloning checkpoint,
+# so /tts can speak as any saved recording while she keeps her own voice on
+# whatever engine that happens to use.
+VOICES_ENABLED = _bool("VOICES_ENABLED", False)
+VOICES_URL = os.getenv("VOICES_URL", "").strip() or "http://127.0.0.1:8087"
+VOICES_MODEL = (os.getenv("VOICES_MODEL", "").strip()
+                or "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit")
+VOICES_DIR = str(ROOT / "tts" / "voices") if "ROOT" in dir() else "tts/voices"
 # Playback goes into Discord's MICROPHONE cable, not its speaker: this is what
 # the channel hears. The return cable is the far side of the one the host
 # account's Discord reads as its microphone — and that account must be

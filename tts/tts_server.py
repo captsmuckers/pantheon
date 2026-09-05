@@ -41,6 +41,7 @@ import os
 import sys
 import threading
 import wave
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -529,7 +530,27 @@ def qwen_mode(model_id: str = "") -> str:
     return "base"
 
 
-def _synth_qwen(text: str, voice: str, instruct: str) -> bytes:
+def _safe_ref(path: str) -> str:
+    """A caller-supplied reference path, or "" if it is not one of ours.
+
+    /synthesize is reachable by anything that can talk to the port, and a bare
+    path from a request is an invitation to read arbitrary files. Only clips
+    already in the voices directory are accepted — the library the panel
+    manages — so the worst a crafted request can do is pick a different saved
+    voice.
+    """
+    if not path:
+        return ""
+    try:
+        root = (Path(__file__).resolve().parent / "voices").resolve()
+        want = (root / Path(path).name).resolve()
+        return str(want) if want.parent == root and want.is_file() else ""
+    except Exception:
+        return ""
+
+
+def _synth_qwen(text: str, voice: str, instruct: str,
+                ref_audio: str = "", ref_text: str = "") -> bytes:
     """One WAV from Qwen3-TTS, in whichever mode the checkpoint implies.
 
     generate() yields CHUNKS, not one waveform — returning the first one only
@@ -543,10 +564,22 @@ def _synth_qwen(text: str, voice: str, instruct: str) -> bytes:
         kwargs["voice"] = voice or DEFAULT_VOICE
     elif mode == "voicedesign":
         kwargs["instruct"] = instruct or VOICE_DESIGN
-    elif VOICE_REF:
-        kwargs["ref_audio"] = VOICE_REF
-        if VOICE_REF_TEXT:
-            kwargs["ref_text"] = VOICE_REF_TEXT
+    elif ref_audio or VOICE_REF:
+        # Per request when given, falling back to the configured one. Without
+        # this the voice lab could not preview a DIFFERENT clip than the one
+        # loaded at startup: it would upload a clip, press Test, and hear the
+        # previous reference — which looks like the upload was ignored.
+        # The model takes ref_audio per generate() call, so no reload needed.
+        kwargs["ref_audio"] = ref_audio or VOICE_REF
+        # A transcript is OPTIONAL and off unless asked for. Passing one flips
+        # Qwen to its in-context path rather than speaker-embedding cloning;
+        # measured on the same 48s reference, the embedding path sounded
+        # closer to the source and generated in 2.19s against 5.60s. Kept
+        # available because the model documents both, but it is not the
+        # default and nothing fills it in for you.
+        text_for = ref_text if ref_audio else VOICE_REF_TEXT
+        if text_for:
+            kwargs["ref_text"] = text_for
     else:
         # Base with nothing to clone. The model happily generates a default
         # voice, so this fails as "it does not sound like the recording"
@@ -581,7 +614,8 @@ def _synth_qwen(text: str, voice: str, instruct: str) -> bytes:
 
 
 def synthesize(text: str, voice: str, device: str, lang: str = None,
-               instruct: str = "") -> bytes:
+               instruct: str = "", ref_audio: str = "",
+               ref_text: str = "") -> bytes:
     """Return a WAV. One inference at a time — the model is not thread-safe.
 
     On the Windows machine serialising also kept this off a GPU shared with
@@ -591,7 +625,7 @@ def synthesize(text: str, voice: str, device: str, lang: str = None,
     if ENGINE == "chatterbox":
         return _synth_chatterbox(text, device)
     if ENGINE == "qwen":
-        return _synth_qwen(text, voice, instruct)
+        return _synth_qwen(text, voice, instruct, ref_audio, ref_text)
     pipeline = get_pipeline(device, lang or lang_for(voice))
     with _lock:
         chunks = [audio for _, _, audio in pipeline(text, voice=voice, speed=1.0)]
@@ -737,6 +771,10 @@ class Handler(BaseHTTPRequestHandler):
         # service. Loading a Qwen checkpoint takes ~20-33s, and having to pay
         # that to hear one adjective changed makes the feature unusable.
         instruct = (payload.get("instruct") or "").strip()
+        # Same reasoning as instruct: auditioning a clone must not need a
+        # restart. Validated against the voices directory, never trusted raw.
+        ref_audio = _safe_ref((payload.get("ref_audio") or "").strip())
+        ref_text = (payload.get("ref_text") or "").strip()
         if not text:
             self._json(400, {"error": "no text"})
             return
@@ -754,7 +792,8 @@ class Handler(BaseHTTPRequestHandler):
             lang = None
 
         try:
-            wav = synthesize(text, voice, self.device, lang, instruct)
+            wav = synthesize(text, voice, self.device, lang, instruct,
+                             ref_audio, ref_text)
         except Exception as exc:
             log.exception("Synthesis failed")
             # A voice name that does not exist surfaces as a 404 from the

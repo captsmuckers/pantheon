@@ -85,6 +85,11 @@ SERVICES = {
                    r"python.*bot\.py", "start-athena.sh", "stop-athena.sh"),
     "tts": Service("tts", "com.athena.tts", "Speech",
                    r"python.*tts_server\.py", "start-tts.sh", "stop-tts.sh"),
+    # The second speech server, for /tts and the voice lab. Listed so it can
+    # be started and stopped from the Services page: it is ~6GB resident and
+    # only earns that while somebody is actually using saved voices.
+    "voices": Service("voices", "com.athena.voices", "Saved voices",
+                      r"python.*tts_server\.py.*--port 8087", "", ""),
 }
 
 
@@ -414,6 +419,10 @@ PREVIEW_TEXT = ("Playing Blade Runner. It is two and a half hours long, and you 
 # names: this endpoint takes a filename from a browser, and the only safe
 # reading of that is "a label", never "a destination".
 VOICES_DIR = ROOT / "tts" / "voices"
+# How much of an upload to keep. Not a model limit — Qwen has none — but long
+# references embed slowly and stop adding anything, so this is a practical
+# ceiling with room to spare over the ~48s that measured well.
+REF_MAX_SECONDS = 90
 _SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]")
 
 
@@ -526,11 +535,19 @@ def save_voice_ref(data: bytes, filename: str, start: float = 0.0,
                    label: str = "", added_by: str = "") -> dict:
     """Store an uploaded clip as a voice reference, and describe what we got.
 
-    Does exactly what scripts/make-voice-ref.sh does, for the same measured
-    reasons: 10 seconds from `start`, mono, 24kHz, loudness-normalised. The
-    speaker encoder only reads the first 6 seconds and the decoder the first
-    10, so a longer clip is not a better one — everything past that is
-    discarded by the model regardless.
+    Mono, 24kHz, loudness-normalised, from `start` — and NOT trimmed to ten
+    seconds any more.
+
+    That cap was Chatterbox's. Its ENC_COND_LEN/DEC_COND_LEN really do stop at
+    6 and 10 seconds, and make-voice-ref.sh documents it for that reason. Qwen
+    has no such limit: extract_speaker_embedding takes the whole waveform and
+    the encoder pools across all of it. Applying Chatterbox's numbers here
+    silently threw away most of every upload. Measured on a 48s reference
+    against a 10s one, the longer clip cloned closer.
+
+    The ceiling that remains is practical rather than modelled: a very long
+    reference is slow to embed and dilutes rather than sharpens, so this takes
+    a generous slice instead of everything.
     """
     import shutil
     import tempfile
@@ -558,7 +575,8 @@ def save_voice_ref(data: bytes, filename: str, start: float = 0.0,
         src = Path(tmp.name)
     try:
         code, err = _run([ffmpeg, "-v", "error", "-y",
-                          "-ss", str(max(start, 0.0)), "-t", "10", "-i", str(src),
+                          "-ss", str(max(start, 0.0)), "-t", str(REF_MAX_SECONDS),
+                          "-i", str(src),
                           "-af", "loudnorm=I=-18:TP=-2:LRA=11",
                           "-ar", "24000", "-ac", "1", "-c:a", "pcm_s16le",
                           str(out_path)], timeout=120)
@@ -572,16 +590,19 @@ def save_voice_ref(data: bytes, filename: str, start: float = 0.0,
             return {"ok": False,
                     "error": f"Only {seconds:.1f}s of audio at that start point. "
                              "Try a smaller start offset."}
-        text = transcribe(out_path)
+        # No transcribing by default. Supplying a transcript switches Qwen to
+        # its in-context path (use_icl = ref_audio and ref_text), which is a
+        # DIFFERENT mechanism from speaker-embedding cloning — and measured
+        # here, the embedding path matched the source better and ran 2.5x
+        # faster. So the clip alone is the normal case; a transcript is a
+        # thing you add deliberately, not a step everyone waits through.
+        text = ""
         note = ""
         if seconds < 5:
-            note = ("Under 5s — the speaker encoder wants about 6, and short "
-                    "references clone poorly.")
-        elif seconds < 9.5:
-            note = "Under 10s, so the decoder sees all of it. Fine, just not maximal."
-        if not text:
-            note = (note + " ").strip() + ("Could not transcribe it — type what "
-                                           "is said, or the clone will be worse.")
+            note = ("Under 5s. Short references clone poorly — 20 to 60 seconds "
+                    "of clear speech works much better.")
+        elif seconds < 15:
+            note = "Usable, but 20 to 60 seconds gives the model more to work from."
         import datetime
         _sidecar(out_path).write_text(json.dumps({
             "transcript": text,
@@ -624,7 +645,8 @@ def envfile_values() -> dict:
     return envfile.read(ROOT / ".env")
 
 
-def preview(voice: str, lang: str, text: str = "", instruct: str = "") -> tuple:
+def preview(voice: str, lang: str, text: str = "", instruct: str = "",
+            ref_audio: str = "", ref_text: str = "", voices: bool = False) -> tuple:
     """(wav bytes, error dict). Asks the running server to speak, not to play.
 
     `instruct` is Qwen VoiceDesign's voice-in-words. It is forwarded unsaved so
@@ -642,8 +664,15 @@ def preview(voice: str, lang: str, text: str = "", instruct: str = "") -> tuple:
     payload = json.dumps({"text": (text or PREVIEW_TEXT)[:600],
                           "voice": voice or fallback,
                           "instruct": instruct or (env.get("TTS_VOICE_DESIGN") or ""),
+                          "ref_audio": ref_audio,
+                          "ref_text": ref_text,
                           "lang": lang or "auto"}).encode()
-    req = urllib.request.Request("http://127.0.0.1:8085/synthesize", data=payload,
+    # The lab previews against the VOICES service, never the live one. That is
+    # the whole point of a second server: trying a voice, or loading a
+    # different checkpoint to try one, must not interrupt her mid-sentence.
+    target = ((env.get("VOICES_URL") or "http://127.0.0.1:8087").rstrip("/")
+              if voices else "http://127.0.0.1:8085")
+    req = urllib.request.Request(f"{target}/synthesize", data=payload,
                                  headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=120) as r:
@@ -730,6 +759,18 @@ def voices() -> dict:
                 "message": "The speech service is not answering, so the voice "
                            "list is unavailable. Start it from the Status page.",
                 "doc": "https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md"}
+
+
+def voices_health() -> dict:
+    """What the voices service reports, or why it is not answering."""
+    env = envfile_values()
+    url = (env.get("VOICES_URL") or "http://127.0.0.1:8087").rstrip("/")
+    try:
+        with urllib.request.urlopen(f"{url}/health", timeout=5) as r:
+            return {"url": url, **json.loads(r.read().decode("utf-8"))}
+    except Exception as exc:
+        return {"url": url, "engine": "", "ready": False,
+                "error": type(exc).__name__}
 
 
 def tts_health() -> dict:

@@ -519,7 +519,9 @@ document.addEventListener('click', e => {
     fetch('/api/tts/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Pantheon-CSRF': '1' },
-      body: JSON.stringify({ voice, lang, instruct })
+      body: JSON.stringify({ voice, lang, instruct,
+        ref_audio: (document.getElementById('f-TTS_VOICE_REF') || {}).value || '',
+        ref_text: (document.getElementById('f-TTS_VOICE_REF_TEXT') || {}).value || '' })
     }).then(async r => {
       if (r.ok) {
         const url = URL.createObjectURL(await r.blob());
