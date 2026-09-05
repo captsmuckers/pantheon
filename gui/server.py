@@ -164,6 +164,7 @@ USER_PATHS = frozenset({
     "/api/whoami",                 # who am I, and may I sign out
     "/api/lab-state",              # what the shared lab has loaded, and whose
     "/api/who",                    # who else is on the panel right now
+    "/account", "/api/password",   # changing your OWN password
     "/api/status", "/api/logout",
     "/api/tts/voices", "/api/tts/preview", "/api/tts/voice-ref",
     "/api/tts/health", "/api/tts/voice-refs", "/api/voices/health",
@@ -451,6 +452,8 @@ class Handler(BaseHTTPRequestHandler):
             self._html(pages.voice_page(self._role()))
         elif path == "/library":
             self._html(pages.library_page(self._role()))
+        elif path == "/account":
+            self._html(pages.account_page(self._role()))
         elif path == "/logs":
             self._html(pages.logs_page())
         elif path == "/security":
@@ -513,6 +516,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _post(self, path: str):
         body = self._body()
+        if path == "/api/password":
+            self._change_password(body)
+            return
         if path == "/api/service":
             service = str(body.get("service", ""))
             action = str(body.get("action", ""))
@@ -614,6 +620,42 @@ class Handler(BaseHTTPRequestHandler):
         token = _new_session(name, role)
         self._json(200, {"ok": True, "role": role, "user": name},
                    {"Set-Cookie": self._session_cookie(token)})
+
+    def _change_password(self, body: dict):
+        """Your own password, and only ever your own.
+
+        Account management is administrators-only, which left everyone else
+        unable to change the password an admin had typed in for them — so the
+        credential they were given was permanent, and shared with whoever set
+        it up. The name comes from the SESSION, never the request body: this
+        endpoint cannot be aimed at another account.
+        """
+        p = self.server.prefs
+        me = self._session().get("user", "")
+        if not me:
+            self._json(403, {"ok": False, "error": "Not signed in."})
+            return
+        current = str(body.get("current", ""))
+        new = str(body.get("new", ""))
+        if len(new) < 8:
+            self._json(400, {"ok": False,
+                             "error": "Use at least 8 characters."})
+            return
+        # Proving the current password matters even though the session already
+        # proves identity: an unattended tab should not be a password reset.
+        if not prefs.check_user(p, me, current):
+            time.sleep(0.5)
+            self._json(403, {"ok": False, "error": "Current password is wrong."})
+            return
+        role = self._role()      # from the session; never from the request
+        err = prefs.set_user(p, me, new, role)
+        if err:
+            self._json(400, {"ok": False, "error": err})
+            return
+        prefs.save(p)
+        self._json(200, {"ok": True,
+                         "message": "Password changed. Other sessions of "
+                                    "yours stay signed in."})
 
     def _users(self):
         """List accounts. Admin-only by the dispatch gate, never hashes."""

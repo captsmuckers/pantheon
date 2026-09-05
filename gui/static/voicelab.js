@@ -567,9 +567,15 @@ function libRow(v, pending) {
       src="/api/tts/clip?name=${encodeURIComponent(v.file)}"></audio>`;
   const form = `<div class="lib-edit-box" hidden>
       <textarea rows="3" class="lib-text">${escapeHtml(v.transcript || '')}</textarea>
+      <p class="help">Play the clip above and correct this to match it,
+         punctuation included. It is what the model aligns the recording
+         against, so it decides how closely a clone keeps rasp and accent.
+         Takes effect the next time this voice is used — by <code>/tts</code>
+         or in the lab; it does not change anything already generated.</p>
       <button type="button" class="lib-save-text"
               data-file="${escapeHtml(v.file)}">Save transcript</button>
       <button type="button" class="ghost lib-cancel">Cancel</button>
+      <span class="try-note lib-note"></span>
     </div>`;
   const keep = `<div class="lib-edit-box" hidden>
       <input type="text" class="lib-name" placeholder="Name this voice">
@@ -661,8 +667,13 @@ document.addEventListener('click', e => {
           toast((r && r.data && r.data.error) || 'Could not save it.');
           return;
         }
+        const n = box.querySelector('.lib-note');
+        if (n) { n.className = 'try-note'; n.textContent = 'Saved.'; }
         toast('Transcript saved.');
-        return loadLibrary().then(loadSaved);
+        /* Re-render after a beat so "Saved." is actually seen: rebuilding the
+           list immediately replaces the row, and the confirmation with it. */
+        return new Promise(r => setTimeout(r, 900))
+          .then(() => loadLibrary()).then(loadSaved);
       });
     return;
   }

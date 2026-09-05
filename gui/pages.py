@@ -20,6 +20,7 @@ import html
 # rather than a page. Hiding them is courtesy, not the control.
 NAV = (("/", "Status", "user"), ("/voice", "Voice lab", "user"),
        ("/library", "Voice library", "user"),
+       ("/account", "Account", "user"),
        ("/settings", "Settings", "admin"), ("/logs", "Logs", "admin"),
        ("/security", "Security", "admin"), ("/setup", "Setup", "admin"))
 
@@ -350,6 +351,42 @@ def library_page(role: str = "admin") -> str:
   <div id="lab-library-body"><p class="loading">Reading…</p></div>
 </section>
 """, "voicelab.js", role)
+
+
+def account_page(role: str = "admin") -> str:
+    """Your own account. The only page a General User owns.
+
+    Everything else about accounts lives under Security, which is
+    administrators-only — so the password an admin typed in for somebody was
+    the password they kept, known to whoever set it up.
+    """
+    return _shell("Account", "/account", """
+<section class="panel">
+  <h2>Your account</h2>
+  <p class="sub">Signed in as <strong id="acct-who">…</strong>.</p>
+</section>
+
+<section class="panel">
+  <h3>Change your password</h3>
+  <div class="field">
+    <label for="pw-current">Current password</label>
+    <input type="password" id="pw-current" autocomplete="current-password">
+  </div>
+  <div class="field">
+    <label for="pw-new">New password</label>
+    <input type="password" id="pw-new" autocomplete="new-password">
+    <p class="help">At least 8 characters.</p>
+  </div>
+  <div class="field">
+    <label for="pw-again">New password again</label>
+    <input type="password" id="pw-again" autocomplete="new-password">
+  </div>
+  <div class="try">
+    <button type="button" id="pw-save" class="primary">Change password</button>
+    <span class="try-note" id="pw-note"></span>
+  </div>
+</section>
+""", "account.js", role)
 
 
 def voice_page(role: str = "admin") -> str:
