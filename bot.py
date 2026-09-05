@@ -30,6 +30,7 @@ from spotify import SpotifyController
 # none of them, and start() returns None there rather than raising.
 import voice
 import speech
+import watchtv
 import speakers
 import imagegen
 
@@ -788,6 +789,82 @@ async def slash_tts(interaction: discord.Interaction, voice: str, phrase: str):
     problem = await speech.say_as(phrase, match[2], match[3])
     await _followup(interaction,
                     problem or f"*{match[1]}:* {phrase}")
+
+
+async def _watchtv_choices(interaction: discord.Interaction, current: str):
+    """Nothing to autocomplete from — YouTube TV is searched live, not indexed.
+
+    Offered as hints rather than a closed list, because the whole point is
+    that nobody should need to know what channel a game is on.
+    """
+    hints = ["red zone", "sunday ticket", "multiview", "nfl network"]
+    cur = (current or "").lower().strip()
+    out = [h for h in hints if cur in h][:5]
+    return [discord.app_commands.Choice(name=h, value=h) for h in out]
+
+
+@bot.tree.command(name="watchtv",
+                  description="Put something from YouTube TV on the stream")
+@discord.app_commands.autocomplete(query=_watchtv_choices)
+async def slash_watchtv(interaction: discord.Interaction, query: str,
+                        prefer: Optional[str] = None):
+    """Open to everyone in the channel, like /tts.
+
+    That is the point of it: somebody who arrives before the person who pays
+    for the subscription should be able to put the game on without a second
+    device, and without anyone driving the Mac through Parsec.
+
+    This does NOT start the Discord screen share — that cannot be automated
+    (see CLAUDE.md). It changes what is on the screen that is already shared.
+    """
+    if not await _guard(interaction):
+        return
+    if not config.WATCHTV_ENABLED:
+        await _followup(interaction, "YouTube TV playback is switched off.")
+        return
+    await interaction.response.defer()
+    if not watchtv.profile_ready():
+        await _followup(
+            interaction,
+            "The YouTube TV browser profile is not signed in yet. That is a "
+            "one-time job on the machine itself.")
+        return
+    try:
+        message, ok = await asyncio.to_thread(watchtv.play, query, prefer or "")
+    except watchtv.NotSignedIn as exc:
+        message, ok = str(exc), False
+    except watchtv.Unavailable as exc:
+        message, ok = str(exc), False
+    except Exception:
+        log.exception("watchtv failed")
+        message, ok = "That did not work. Check the bot log.", False
+    await _followup(interaction, message)
+
+
+@bot.tree.command(name="whatson",
+                  description="What is live on YouTube TV right now")
+async def slash_whatson(interaction: discord.Interaction):
+    """So somebody without their own subscription can see what is available."""
+    if not await _guard(interaction):
+        return
+    if not config.WATCHTV_ENABLED:
+        await _followup(interaction, "YouTube TV playback is switched off.")
+        return
+    await interaction.response.defer()
+    try:
+        live = await asyncio.to_thread(watchtv.whats_on)
+    except watchtv.NotSignedIn as exc:
+        await _followup(interaction, str(exc))
+        return
+    except Exception:
+        log.exception("whatson failed")
+        await _followup(interaction, "Could not read the guide.")
+        return
+    if not live:
+        await _followup(interaction, "Nothing is showing as live right now.")
+        return
+    lines = "\n".join(f"• {c.describe()}" for c in live)
+    await _followup(interaction, f"Live now:\n{lines}")
 
 
 @bot.tree.command(name="play", description="Play a movie or episode right now")

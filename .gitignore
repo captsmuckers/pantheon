@@ -78,3 +78,7 @@ scratchpad/
 # their upstream projects, not here, and a virtualenv rebuilt by setup.
 /tts/piper/
 /tts/.venv-piper/
+
+# A signed-in Chrome profile: cookies, tokens, an authenticated Google session.
+# Never commit this.
+/browser-profiles/

@@ -354,6 +354,35 @@ BROWSER_PROFILE = os.getenv("BROWSER_PROFILE", "").strip() or BOT_NAME
 # same way mpv does. There's no in-window way out of it; Alt+F4 closes it.
 BROWSER_KIOSK = _bool("BROWSER_KIOSK", True)
 
+# --- YouTube TV ---
+# A signed-in Chrome, driven by Playwright. Nothing here goes near yt-dlp:
+# YouTube TV is Widevine-protected, so there is no format to fetch and the
+# cookie route above does not apply. See watchtv.py.
+WATCHTV_ENABLED = _bool("WATCHTV_ENABLED", True)
+# A REAL Chrome, not Playwright's bundled Chromium — that ships without a
+# Widevine module, so DRM silently fails to play in it. Left empty, Playwright
+# resolves the installed Chrome via channel="chrome".
+WATCHTV_CHROME = os.getenv("WATCHTV_CHROME", "").strip()
+# Its own profile directory, holding the YouTube TV sign-in. Separate from
+# BROWSER_PROFILE (Firefox, age-gated YouTube) because they are different
+# browsers signed into different things for different reasons.
+WATCHTV_PROFILE = (os.getenv("WATCHTV_PROFILE", "").strip()
+                   or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "browser-profiles", "youtubetv"))
+# Which feed wins when the same game is offered more than once: "broadcast",
+# "4k" or "multiview". A PREFERENCE, not a filter — watchtv.rank() never
+# removes a candidate, so a game carried only by a 4K feed or only inside a
+# multiview still plays. This only decides which wins when there is a choice.
+#
+# Default is the plain single-game feed: this machine downscales to a 1080p
+# Discord share, and decoding 4K to throw most of it away spends exactly the
+# GPU headroom the notes above are about.
+WATCHTV_PREFER = os.getenv("WATCHTV_PREFER", "").strip().lower() or "broadcast"
+try:
+    WATCHTV_TIMEOUT = float(os.getenv("WATCHTV_TIMEOUT", "").strip() or 45)
+except ValueError:
+    WATCHTV_TIMEOUT = 45.0
+
 # --- Voice commands ---
 # Spoken commands, captured from the local Discord client's audio output via a
 # VB-Audio virtual cable. NOT Discord's voice-receive API, which has been

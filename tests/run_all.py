@@ -49,6 +49,7 @@ SUITES = [
     ("search command", "test_search_command.py"),
     ("youtube", "test_youtube.py"),
     ("live streams", "test_streams.py"),
+    ("youtube tv selection", "test_watchtv.py"),
     ("series playback", "test_show_playback.py"),
     ("episode phrasing", "test_episode_phrasing.py"),
     ("youtube links", "test_youtube_links.py"),

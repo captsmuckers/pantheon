@@ -482,6 +482,35 @@ SETTINGS: tuple[Setting, ...] = (
     _s("YOUTUBE_TIMEOUT", "float", default=20.0, lo=5, hi=120, section="YouTube",
        advanced=True),
 
+    # -- YouTube TV ---------------------------------------------------
+    _s("WATCHTV_ENABLED", "bool", default=True, section="YouTube TV",
+       restart="bot",
+       help="Put live TV on the stream with /watchtv. Needs a Chrome profile "
+            "signed into YouTube TV; this is not yt-dlp and never touches it."),
+    _s("WATCHTV_PREFER", "choice", default="broadcast",
+       choices=("broadcast", "4k", "multiview"),
+       choice_labels=("The single-game broadcast",
+                      "The 4K feed, where there is one",
+                      "Multiview, several games at once"),
+       section="YouTube TV", restart="bot",
+       help="Which feed wins when the same game is offered more than once. A "
+            "preference, not a filter: a game carried ONLY by a 4K feed or "
+            "only inside a multiview still plays. Broadcast is the default "
+            "because the Discord share is 1080p, so decoding 4K to throw most "
+            "of it away spends GPU headroom for nothing."),
+    _s("WATCHTV_PROFILE", "str", section="YouTube TV", restart="bot",
+       advanced=True,
+       help="Chrome profile directory holding the YouTube TV sign-in. Its own "
+            "profile, separate from the Firefox one used for age-gated "
+            "YouTube — different browser, different account, different job."),
+    _s("WATCHTV_CHROME", "str", section="YouTube TV", restart="bot",
+       advanced=True,
+       help="Path to Chrome. Blank finds the installed one. It must be a real "
+            "Chrome: the Chromium bundled with Playwright ships no Widevine "
+            "module, so DRM silently never plays in it."),
+    _s("WATCHTV_TIMEOUT", "float", default=45.0, lo=10, hi=180,
+       section="YouTube TV", restart="bot", advanced=True),
+
     # -- Languages ----------------------------------------------------
     _s("DEFAULT_AUDIO_LANG", "str", default="English", section="Languages",
        help="Preferred audio track when a file offers several."),

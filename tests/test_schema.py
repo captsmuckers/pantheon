@@ -136,9 +136,19 @@ def test_every_setting_is_usable():
     no_choices = [s.name for s in schema.SETTINGS if s.kind == "choice" and not s.choices]
     check("every choice offers choices", not no_choices, str(no_choices))
 
-    bad_restart = [s.name for s in schema.SETTINGS
-                   if s.restart not in ("bot", "tts", "none")]
-    check("restart targets are real", not bad_restart, str(bad_restart))
+    # Derived from the panel's own service registry rather than a literal
+    # list. A setting naming a service the panel cannot restart is the actual
+    # fault, and the literal version went stale the moment a third service was
+    # added — VOICES_MODEL named "voices", which is perfectly real, and this
+    # failed anyway. Worse, gui/server.py's _saved_message looked the name up
+    # in a dict that did not have it, so the save succeeded and then raised
+    # while building its own success message.
+    from gui import services as _svc
+
+    valid = set(_svc.SERVICES) | {"none"}
+    bad_restart = [s.name for s in schema.SETTINGS if s.restart not in valid]
+    check("restart targets name a service the panel can restart",
+          not bad_restart, f"{bad_restart} not in {sorted(valid)}")
 
     # A default must itself pass validation, or the shipped config is invalid.
     bad_default = []
