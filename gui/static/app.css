@@ -298,24 +298,24 @@ body.filtering .section-head .count { display: none; }
 .ref-upload .file-btn { cursor: pointer; }
 .ref-upload .ref-start { display: inline-flex; align-items: center; gap: .3rem; opacity: .8; }
 .ref-upload .ref-start input { width: 4.5rem; }
-.try-note.warn { color: var(--warn, #b8860b); }
+.try-note.warn { color: var(--warn); }
 
 /* Accounts table on the Security page. */
 table.users { width: 100%; border-collapse: collapse; margin: .6rem 0; }
 table.users th { text-align: left; font-weight: 600; opacity: .7; font-size: .85em; }
-table.users td, table.users th { padding: .35rem .5rem; border-bottom: 1px solid var(--line, #333); }
+table.users td, table.users th { padding: .35rem .5rem; border-bottom: 1px solid var(--edge); }
 table.users .you { opacity: .6; font-size: .85em; }
 
 /* Voice lab: the kind-of-voice chooser. Cards rather than a dropdown because
    each option needs a sentence of explanation to be meaningful. */
 .lab-modes { display: grid; gap: .5rem; margin: .6rem 0; }
 .lab-mode { display: grid; grid-template-columns: auto 1fr; gap: .1rem .6rem;
-            align-items: start; padding: .6rem .8rem; border: 1px solid var(--line, #333);
+            align-items: start; padding: .6rem .8rem; border: 1px solid var(--edge);
             border-radius: 6px; cursor: pointer; }
 .lab-mode input { grid-row: 1 / span 2; align-self: center; }
 .lab-mode .sub { grid-column: 2; font-size: .85em; opacity: .7; margin: 0; }
-.lab-mode.on { border-color: var(--accent, #6ea8fe); }
-.help.warn { border-left: 3px solid var(--warn, #b8860b); padding-left: .6rem; }
+.lab-mode.on { border-color: var(--accent); }
+.help.warn { border-left: 3px solid var(--warn); padding-left: .6rem; }
 #lab-audio { width: 100%; margin-top: .5rem; }
 
 /* Signed-out pages: no nav, everything centred on the page.
@@ -338,13 +338,13 @@ main.centred .signin button.primary { width: 100%; }
    which a table column does badly at narrow widths. */
 .lib { list-style: none; margin: 0; padding: 0; }
 .lib-row { display: flex; align-items: flex-start; gap: 1rem;
-           padding: .6rem 0; border-bottom: 1px solid var(--line, #2a2a2a); }
+           padding: .6rem 0; border-bottom: 1px solid var(--edge); }
 .lib-row:last-child { border-bottom: 0; }
 .lib-main { flex: 1 1 auto; min-width: 0; }
 .lib-meta { display: block; font-size: .82rem; opacity: .7; }
 .lib-said { display: block; font-size: .82rem; opacity: .75; margin-top: .15rem;
             overflow-wrap: anywhere; }
-.lib-said.warn { opacity: .9; color: var(--warn, #d9a441); }
+.lib-said.warn { opacity: .9; color: var(--warn); }
 .lib-act { flex: 0 0 auto; }
 .lib-edit-box { margin-top: .5rem; }
 .lib-edit-box textarea { width: 100%; font: inherit; }
@@ -354,7 +354,7 @@ main.centred .signin button.primary { width: 100%; }
 #lab-refaudio { display: block; width: 100%; max-width: 22rem; height: 2rem;
                 margin-bottom: .4rem; }
 .bake { margin-top: .8rem; padding-top: .8rem;
-        border-top: 1px solid var(--line, #2a2a2a); }
+        border-top: 1px solid var(--edge); }
 .bake .bake-name input, .bake input[type=text] { font: inherit; }
 
 /* Identity and sign-out sit at the end of the header bar, after the nav. */
@@ -364,7 +364,7 @@ main.centred .signin button.primary { width: 100%; }
 
 /* Shared-lab banner: one line, always the same place, never a dialog. */
 .labbar { padding: .45rem 1rem; font-size: .85rem;
-          background: var(--panel, #1b1b1b);
-          border-bottom: 1px solid var(--line, #2a2a2a); }
-.labbar-warn { color: var(--warn, #d9a441); }
+          background: var(--panel);
+          border-bottom: 1px solid var(--edge); }
+.labbar-warn { color: var(--warn); }
 .labbar-alone { opacity: .6; }

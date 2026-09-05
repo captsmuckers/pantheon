@@ -73,3 +73,8 @@ CLAUDE.local.md
 
 # Local experiments and bake-off artifacts. Machine-specific, not a Pantheon feature.
 scratchpad/
+
+# Pre-trained voice models and their runtime. 63MB of weights that belong to
+# their upstream projects, not here, and a virtualenv rebuilt by setup.
+/tts/piper/
+/tts/.venv-piper/

@@ -487,6 +487,26 @@ def voice_refs() -> dict:
             waiting.append(_describe(wav))
         else:
             out.append(_describe(wav))
+    # Pre-trained voices. They have no clip and no transcript, so most of the
+    # library's controls do not apply — but /tts offers them, and a library
+    # that does not list what /tts offers is a library that lies.
+    for decl in sorted(VOICES_DIR.glob("*.piper.json")):
+        try:
+            meta = json.loads(decl.read_text("utf-8"))
+        except (ValueError, OSError):
+            continue
+        stem = decl.name[: -len(".piper.json")]
+        out.append({
+            "name": stem, "file": decl.name,
+            "path": str(decl.relative_to(ROOT)),
+            "label": meta.get("label") or stem,
+            "transcript": "", "added_by": "", "added": "",
+            "seconds": 0.0, "age_hours": 0.0,
+            "needs_transcript": False,
+            "pretrained": True,
+            "note": meta.get("note", ""),
+        })
+    out.sort(key=lambda r: r["name"].lower())
     return {"voices": out, "count": len(out),
             "unsaved": waiting, "unsaved_count": len(waiting)}
 

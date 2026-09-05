@@ -553,6 +553,19 @@ function libRow(v, pending) {
     ? `uploaded ${v.age_hours}h ago`
     : (v.added ? escapeHtml(v.added) : '') +
       (v.added_by ? ` · by ${escapeHtml(v.added_by)}` : '');
+  if (v.pretrained) {
+    /* No clip, no transcript, nothing to correct or clone from. Listing it
+       without saying so invites people to look for controls it cannot have. */
+    return `<li class="lib-row">
+      <div class="lib-main">
+        <strong>${escapeHtml(v.label)}</strong>
+        <span class="lib-meta">pre-trained voice · usable from /tts · cannot be
+          cloned from or edited</span>
+        ${v.note ? `<span class="lib-said">${escapeHtml(v.note)}</span>` : ''}
+      </div>
+      <div class="lib-act"></div>
+    </li>`;
+  }
   const said = v.transcript
     ? `<span class="lib-said">“${escapeHtml(v.transcript.slice(0, 80))}${
          v.transcript.length > 80 ? '…' : ''}”</span>`

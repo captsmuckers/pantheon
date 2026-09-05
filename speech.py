@@ -247,6 +247,20 @@ def resample(mono, source_rate: int, target_rate: int):
     up, down = int(target_rate) // g, int(source_rate) // g
 
     x = np.asarray(mono, dtype="float64")
+
+    # Polyphase is only cheap when `up` is small. 24000 -> 48000 gives up=2;
+    # 22050 -> 48000 gives up=320, which zero-stuffs five seconds of speech
+    # into 38 million samples and then convolves a sinc across all of it. That
+    # is minutes of CPU, and it looked exactly like the bot hanging when a
+    # Piper voice (22050 Hz) was added. Fourier resampling is O(n log n) and
+    # band-limited by construction, so it has no images to filter out either.
+    if up > 16:
+        n_out = int(round(len(x) * int(target_rate) / int(source_rate)))
+        X = np.fft.rfft(x)
+        keep = min(len(X), n_out // 2 + 1)
+        Y = np.zeros(n_out // 2 + 1, dtype=complex)
+        Y[:keep] = X[:keep]
+        return (np.fft.irfft(Y, n_out) * (n_out / max(len(x), 1))).astype("float32")
     if up > 1:
         stuffed = np.zeros(len(x) * up, dtype="float64")
         stuffed[::up] = x
@@ -547,6 +561,23 @@ class Speaker:
         speakable = sanitize_for_speech(text)
         if not speakable:
             return "There is nothing there to say."
+
+        # A pre-trained voice rather than a reference clip. Some voices cannot
+        # be cloned from a recording at all: GLaDOS is a human actress under a
+        # vocoder, and Qwen's tokeniser models human vocal production — it
+        # reproduces the performance and normalises the machine away. A model
+        # trained on the processed voice carries it in the weights instead.
+        #
+        # Piper is a command, not a server. Nothing is resident, nothing loads
+        # until a line is asked for, and it beats realtime on CPU — so this is
+        # a branch here rather than a fourth engine to run, watch and restart.
+        if ref_audio.endswith(".onnx"):
+            got = await asyncio.to_thread(_piper_wav, ref_audio, speakable,
+                                          self._rate)
+            if isinstance(got, str):
+                return got
+            return await self._play_wav_bytes(got, ref_audio, speakable)
+
         try:
             async with httpx.AsyncClient(timeout=config.TTS_TIMEOUT) as client:
                 # WITH the transcript, deliberately. That puts Qwen in its
@@ -568,6 +599,15 @@ class Speaker:
             return ("The voices service is not answering. It may need starting "
                     "from the control panel.")
 
+        return await self._play_wav_bytes(payload, ref_audio, speakable)
+
+    async def _play_wav_bytes(self, payload: bytes, ref_audio: str,
+                              speakable: str) -> str:
+        """Decode, resample and play one WAV. Shared by every /tts path.
+
+        Piper writes 22050 Hz and Qwen 24000, so resample() earning its keep
+        here is the only reason a second engine needs nothing else.
+        """
         mono, rate = await asyncio.to_thread(decode_wav, payload)
         audio = await asyncio.to_thread(resample, mono, rate, self._rate)
         audio = await asyncio.to_thread(normalize, audio)
@@ -823,6 +863,62 @@ async def say_as(text: str, ref_audio: str, ref_text: str = "") -> str:
     return await _speaker.say_as(text, ref_audio, ref_text)
 
 
+PIPER_TIMEOUT = 120
+
+
+def _piper_wav(model: str, text: str, rate: int = 0):
+    """WAV bytes from a Piper model, or a string saying why not.
+
+    Runs in its own virtualenv for the same reason every other engine does:
+    piper pulls onnxruntime and an espeak phonemiser, and the bot's
+    environment is not the place to litigate that.
+    """
+    import shutil
+    import subprocess
+    import tempfile
+
+    root = ROOT if "ROOT" in globals() else Path(".")
+    exe = Path(root) / "tts" / ".venv-piper" / "bin" / "piper"
+    conf = Path(model + ".json")
+    if not exe.exists():
+        return "The Piper voice runtime is missing. Reinstall tts/.venv-piper."
+    if not Path(model).exists():
+        return f"That voice's model file is missing: {Path(model).name}"
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "out.wav"
+        cmd = [str(exe), "-m", str(model), "-f", str(out)]
+        if conf.exists():
+            cmd[3:3] = ["-c", str(conf)]
+        try:
+            r = subprocess.run(cmd, input=text.encode("utf-8"),
+                               capture_output=True, timeout=PIPER_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            return "That voice took too long to speak."
+        except OSError as exc:
+            return f"Could not run the Piper voice: {exc}"
+        if r.returncode != 0 or not out.exists():
+            err = (r.stderr or b"").decode("utf-8", "replace").strip()[-200:]
+            log.warning("piper failed: %s", err)
+            return "That voice failed to speak. Check the bot log."
+        # Piper writes 22050 Hz. Handing that to resample() means a 320x
+        # zero-stuff (gcd(22050,48000)=150) and a sinc convolution over 38
+        # million samples — minutes of CPU for five seconds of speech, which
+        # presents as /tts thinking forever. Qwen's 24000 Hz hits up=2 and
+        # hides the problem. Convert here, where ffmpeg does it in one pass.
+        if rate:
+            conv = Path(tmp) / "conv.wav"
+            ff = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
+            if Path(ff).exists():
+                c = subprocess.run(
+                    [ff, "-v", "error", "-y", "-i", str(out),
+                     "-ar", str(rate), "-ac", "1", str(conv)],
+                    capture_output=True, timeout=60)
+                if c.returncode == 0 and conv.exists():
+                    return conv.read_bytes()
+                log.warning("ffmpeg rate convert failed, using piper's rate")
+        return out.read_bytes()
+
+
 def saved_voices() -> list:
     """The voice library, as (name, label, path). Read fresh every time.
 
@@ -855,9 +951,26 @@ def saved_voices() -> list:
                 except Exception:
                     pass
             out.append((wav.stem, label, str(wav), text))
+        # Pre-trained voices, declared by a small sidecar rather than a clip.
+        # They answer /tts like any other name; they simply cannot be cloned
+        # FROM, having no reference recording to clone.
+        for decl in sorted(Path(d).glob("*.piper.json")):
+            try:
+                meta = _json.loads(decl.read_text("utf-8"))
+            except (ValueError, OSError):
+                continue
+            model = meta.get("model") or ""
+            if not model:
+                continue
+            mp = Path(model)
+            if not mp.is_absolute():
+                mp = Path(d).parent / "piper" / mp.name
+            stem = decl.name[: -len(".piper.json")]
+            out.append((stem, meta.get("label") or stem.replace("_", " "),
+                        str(mp), ""))
     except Exception:
         log.warning("Could not read the voice library", exc_info=True)
-    return out
+    return sorted(out, key=lambda r: r[0].lower())
 
 
 async def ack() -> None:
