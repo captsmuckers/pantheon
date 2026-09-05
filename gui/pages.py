@@ -19,6 +19,7 @@ import html
 # the routes regardless, so a friend typing /security by hand still gets a 403
 # rather than a page. Hiding them is courtesy, not the control.
 NAV = (("/", "Status", "user"), ("/voice", "Voice lab", "user"),
+       ("/library", "Voice library", "user"),
        ("/settings", "Settings", "admin"), ("/logs", "Logs", "admin"),
        ("/security", "Security", "admin"), ("/setup", "Setup", "admin"))
 
@@ -48,8 +49,9 @@ def _shell(title: str, here: str, body: str, script: str = "",
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{html.escape(title)} — {html.escape(PROJECT)}</title>
 <link rel="stylesheet" href="/static/app.css">
-</head><body>
-<header class="{'' if chrome else 'bare'}"><h1><span class="mark">◆</span> {html.escape(PROJECT)}</h1>{f'<nav>{nav}</nav>' if chrome else ''}</header>
+</head><body data-role="{html.escape(role)}">
+<header class="{'' if chrome else 'bare'}"><h1><span class="mark">◆</span> {html.escape(PROJECT)}</h1>{f'<nav>{nav}</nav>' if chrome else ''}{'<div class="who"><span id="whoami"></span><button type="button" id="signout" class="ghost">Sign out</button></div>' if chrome else ''}</header>
+{'<div id="labbar" class="labbar" hidden></div>' if chrome else ''}
 <main class="{'' if chrome else 'centred'}">{body}</main>
 <div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>
@@ -327,6 +329,29 @@ def forbidden_page() -> str:
 """, "")
 
 
+def library_page(role: str = "admin") -> str:
+    """The stored clips, as a place rather than a panel at the bottom of a bench.
+
+    The lab is where you try things; this is what you keep. They were one page
+    and it read as one activity, so managing the library meant scrolling past
+    a mode picker and an upload form that had nothing to do with it.
+    """
+    return _shell("Voice library", "/library", """
+<section class="panel">
+  <h2>Voice library</h2>
+  <p class="sub">Every clip stored on this machine. These are what
+     <code>/tts</code> and <code>/voices</code> offer in Discord, and what the
+     lab clones from.</p>
+  <p class="sub"><strong>The transcript is what decides clone quality.</strong>
+     When it is present and accurate, the model conditions on the recording
+     itself and keeps rasp, accent and grain. When it is blank, the clip is
+     reduced to a 1024-number speaker average that keeps pitch and little else
+     — with no error shown anywhere. Correct any that are wrong.</p>
+  <div id="lab-library-body"><p class="loading">Reading…</p></div>
+</section>
+""", "voicelab.js", role)
+
+
 def voice_page(role: str = "admin") -> str:
     """A bench for trying voices, deliberately NOT the settings form.
 
@@ -357,10 +382,16 @@ def voice_page(role: str = "admin") -> str:
 
 <section class="panel">
   <h3>Try it</h3>
+  <p class="sub">Plays in this browser only. Athena is not affected and nothing
+     is saved.</p>
   <div class="field">
-    <label for="lab-text">Line to speak</label>
+    <label for="lab-text">4. What the voice should say</label>
     <input type="text" id="lab-text"
            value="Playing The Emperor's New Groove. Do try to keep up.">
+    <p class="help">Anything you want to hear it say — this is the output, not
+       the recording. The line below is only an example; replace it or leave
+       it. It is <em>not</em> the same as “what it says”, which is the
+       transcript of the clip you uploaded.</p>
   </div>
   <div class="try">
     <button type="button" id="lab-test">▶ Test</button>
@@ -369,6 +400,7 @@ def voice_page(role: str = "admin") -> str:
   <audio id="lab-audio" controls hidden></audio>
 </section>
 
+""" + ('''
 <section class="panel" id="lab-apply-panel">
   <h3>Apply to Athena</h3>
   <p class="sub" id="lab-apply-help">This writes what is above to the saved
@@ -376,5 +408,13 @@ def voice_page(role: str = "admin") -> str:
      in Discord from then on.</p>
   <button type="button" id="lab-apply" class="primary">Apply to Athena</button>
   <span class="try-note" id="lab-apply-note"></span>
-</section>
+</section>''' if role == "admin" else '''
+<section class="panel">
+  <h3>Changing Athena\u2019s own voice</h3>
+  <p class="sub">Everything on this page is yours to use: load any kind of
+     voice, clone recordings, test them, and save them to the library for
+     <code>/tts</code> in Discord. Changing the voice <em>Athena herself</em>
+     speaks with is reserved for administrators \u2014 ask one if you want a
+     voice you have made to become hers.</p>
+</section>''') + """
 """, "voicelab.js", role)

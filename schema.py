@@ -360,13 +360,19 @@ SETTINGS: tuple[Setting, ...] = (
     _s("VOICES_MODEL", "choice",
        default="mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
        choices=("mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
-                "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"),
+                "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+                "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
+                "mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit"),
        choice_labels=("Clone a voice from a recording  (better quality)",
-                      "Clone a voice from a recording  (faster)"),
-       section="Speech", restart="tts", advanced=True,
-       help="Which cloning model the voices service loads. Only cloning "
-            "checkpoints are offered: the whole point of this service is to "
-            "speak as any saved recording, and the other kinds cannot."),
+                      "Clone a voice from a recording  (faster)",
+                      "Describe the voice you want, in words",
+                      "One of Qwen's 9 ready-made voices"),
+       section="Speech", restart="voices", advanced=True,
+       help="Which checkpoint the voices service loads. The voice lab sets "
+            "this when you press Load for testing. Note that /tts cloning in "
+            "Discord needs one of the two cloning checkpoints — while a "
+            "describe or ready-made checkpoint is loaded, /tts cannot speak "
+            "as a saved recording."),
     # The bot, not the speech service: it sends the voice name on every
     # synthesize call, and the server only falls back to its own --voice when
     # a request omits one. Restarting the speech service therefore changes

@@ -51,6 +51,7 @@ function paintLive() {
 
 function controls() {
   const wrap = document.getElementById('lab-controls');
+  if (!wrap) return;               // the library page has no bench
   const chosen = wrap.dataset.model || LIVE.qwen_model || MODES[0][0];
   const mode = modeOf(chosen);
   const needsLoad = mode !== LIVE.qwen_mode || LIVE.engine !== 'qwen';
@@ -67,21 +68,46 @@ function controls() {
 
   if (needsLoad) {
     html += `<p class="help warn">This is not the kind currently loaded, so Test
-      needs to load it first — about 30 seconds, and it interrupts her speech
-      while it happens. <button type="button" id="lab-load" class="ghost">Load it
+      needs to load it first — about 30 seconds. This loads into the lab's own
+      service; Athena keeps talking throughout.
+      <button type="button" id="lab-load" class="ghost">Load it
       for testing</button></p>`;
   }
 
   if (mode === 'customvoice') {
     html += `<div class="field"><label for="lab-voice">Voice</label>
-      <select id="lab-voice"></select></div>`;
+      <select id="lab-voice"></select></div>` + `      <div class="field bake">
+        <label>Keep this voice</label>
+        <div class="ref-upload">
+          <label class="ref-name">Name it
+            <input type="text" class="bake-name" placeholder="Athena" maxlength="48"></label>
+          <button type="button" class="ghost bake-go">Save this voice to the library</button>
+          <span class="try-note bake-note"></span>
+        </div>
+        <p class="help">Speaks a fixed passage in this voice and stages the
+           audio as a library clip, with an exact transcript. From then on it
+           behaves like any recorded voice: usable from <code>/tts</code>, and
+           clonable without this checkpoint loaded.</p>
+      </div>`;
   } else if (mode === 'voicedesign') {
     html += `<div class="field"><label for="lab-design">Describe the voice</label>
       <textarea id="lab-design" rows="3"
         placeholder="a woman in her thirties with a low, dry, aristocratic English voice, bored and faintly contemptuous"
       >${escapeHtml(LIVE.voice_design || '')}</textarea>
       <p class="help">Age, accent, pitch and manner all work. Press Test, adjust
-         the wording, test again — it costs nothing and needs no restart.</p></div>`;
+         the wording, test again — it costs nothing and needs no restart.</p></div>` + `      <div class="field bake">
+        <label>Keep this voice</label>
+        <div class="ref-upload">
+          <label class="ref-name">Name it
+            <input type="text" class="bake-name" placeholder="Athena" maxlength="48"></label>
+          <button type="button" class="ghost bake-go">Save this voice to the library</button>
+          <span class="try-note bake-note"></span>
+        </div>
+        <p class="help">Speaks a fixed passage in this voice and stages the
+           audio as a library clip, with an exact transcript. From then on it
+           behaves like any recorded voice: usable from <code>/tts</code>, and
+           clonable without this checkpoint loaded.</p>
+      </div>`;
   } else if (mode === 'base') {
     html += `<div class="field"><label for="lab-saved">Saved voices</label>
       <select id="lab-saved"><option value="">— loading —</option></select>
@@ -91,25 +117,40 @@ function controls() {
       <div class="field"><label>Or add a new one</label>
       <div class="ref-upload">
         <label class="ref-name">1. Name it
-          <input type="text" id="lab-label" placeholder="Ray" maxlength="48"></label>
+          <input type="text" id="lab-label" placeholder="Athena" maxlength="48"></label>
         <label class="ref-start">start at
           <input type="number" id="lab-start" value="0" min="0" step="1"> s</label>
         <label class="ghost file-btn">2. Upload a sample file
           <input type="file" id="lab-file" accept="audio/*,video/*" hidden></label>
         <span class="try-note" id="lab-upnote"></span>
       </div>
-      <div id="lab-pending" hidden>
-        <p class="help warn">Not saved yet. Press Test to hear it, then Save to
-           keep it — or upload a different take. Nothing reaches the library
-           until you save, so bad reads and failed clones do not pile up.</p>
-        <button type="button" id="lab-save" class="primary">Save to library</button>
-        <button type="button" id="lab-discard" class="ghost">Discard</button>
-      </div>
-      <p class="help">Trimmed to 10 seconds, levelled and transcribed for you.
-         One speaker, no music, in the tone you want back.</p>
+      <p class="help">Up to 90 seconds is kept, levelled and transcribed for
+         you. One speaker, no music, in the tone you want back. Use
+         <em>start at</em> to skip an intro.</p>
       <input type="hidden" id="lab-ref" value="${escapeHtml(LIVE.voice_ref || '')}">
       <span id="lab-refactions"></span>
-      <input type="hidden" id="lab-reftext" value="${escapeHtml(LIVE.voice_ref_text || '')}">
+      <div class="field" id="lab-reftext-field">
+        <label for="lab-reftext">3. Check what it says</label>
+        <audio id="lab-refaudio" controls preload="none" hidden></audio>
+        <textarea id="lab-reftext" rows="3">${escapeHtml(LIVE.voice_ref_text || '')}</textarea>
+        <p class="help"><strong>This one field decides whether the clone sounds
+           like the person.</strong> When it matches the recording, the model
+           copies the recording itself and keeps rasp, accent and grain. When
+           it is blank or wrong, the clip is reduced to a 1024-number average
+           that keeps pitch and little else — the voice comes back smooth and
+           generic, and nothing reports an error. It is filled in
+           automatically and is often imperfect: read it against the clip and
+           fix the words and punctuation before you go on.</p>
+      </div>
+      <div id="lab-pending" hidden>
+        <p class="help warn">Now go to <strong>Try it</strong> below, type
+           anything you want to hear, and press <strong>Test</strong>. Come
+           back here and press <strong>5. Save to library</strong> to keep it,
+           or upload a different take. Nothing reaches the library until you
+           save, so bad reads and failed clones do not pile up.</p>
+        <button type="button" id="lab-save" class="primary">5. Save to library</button>
+        <button type="button" id="lab-discard" class="ghost">Discard</button>
+      </div>
       <p class="help" id="lab-refnow">${LIVE.voice_ref
         ? 'Currently using: <code>' + escapeHtml(LIVE.voice_ref) + '</code>'
         : '<strong>No recording set.</strong> Until you upload one and press Apply, '
@@ -171,9 +212,12 @@ function syncSaved() {
   const now = document.getElementById('lab-refnow');
   if (!sel || !ref) return;
   const pick = SAVED.find(v => v.path === sel.value);
+  const ra = document.getElementById('lab-refaudio');
   if (pick) {
     ref.value = pick.path;
     txt.value = pick.transcript || '';
+    if (ra) { ra.src = '/api/tts/clip?name=' + encodeURIComponent(pick.file);
+              ra.hidden = false; }
     if (now) {
       now.innerHTML = pick.transcript
         ? 'Using <code>' + escapeHtml(pick.label) + '</code>. It says: “'
@@ -193,14 +237,56 @@ document.addEventListener('change', e => {
 });
 
 document.addEventListener('click', e => {
+  const bake = e.target.closest('.bake-go');
+  if (bake) {
+    const wrap = bake.closest('.bake');
+    const note = wrap.querySelector('.bake-note');
+    const label = wrap.querySelector('.bake-name').value.trim();
+    if (!label) { note.className = 'try-note bad';
+                  note.textContent = 'Give it a name first.'; return; }
+    const model = document.getElementById('lab-controls').dataset.model;
+    const md = modeOf(model);
+    bake.disabled = true;
+    note.className = 'try-note';
+    note.textContent = 'Speaking the passage in this voice — about 30 seconds…';
+    post('/api/tts/voice-refs', { action: 'bake', label,
+          instruct: md === 'voicedesign'
+            ? (document.getElementById('lab-design') || {}).value || '' : '',
+          voice: md === 'customvoice'
+            ? (document.getElementById('lab-voice') || {}).value || '' : '' })
+      .then(r => {
+        bake.disabled = false;
+        if (!r || !r.ok || (r.data && r.data.ok === false)) {
+          note.className = 'try-note bad';
+          note.textContent = (r && r.data && r.data.error) || 'Could not save it.';
+          return;
+        }
+        note.textContent = `Saved as "${r.data.name}" (${r.data.seconds}s). `
+                         + 'Use it in Discord with /tts ' + r.data.name
+                         + ' — once a cloning checkpoint is loaded.';
+        loadLibrary(); loadSaved();
+      });
+    return;
+  }
   const b = e.target.closest('#lab-save, #lab-discard');
   if (b) {
     const note = document.getElementById('lab-upnote');
     const box = document.getElementById('lab-pending');
     if (b.id === 'lab-discard') {
       post('/api/tts/voice-refs', { action: 'discard', pending: PENDING })
-        .then(() => { PENDING=''; box.hidden = true;
-                      note.textContent = 'Discarded. Nothing was saved.'; });
+        .then(() => {
+          PENDING=''; PENDING_TEXT=''; box.hidden = true;
+          /* The reference fields still pointed at the file just deleted, so
+             the next Test asked for a clip that no longer existed. */
+          const ref = document.getElementById('lab-ref');
+          const txt = document.getElementById('lab-reftext');
+          const ra  = document.getElementById('lab-refaudio');
+          if (ref) ref.value = '';
+          if (txt) txt.value = '';
+          if (ra) { ra.removeAttribute('src'); ra.hidden = true; }
+          note.textContent = 'Discarded. Nothing was saved.';
+          loadSaved();
+        });
       return;
     }
     const label = (document.getElementById('lab-label') || {}).value.trim();
@@ -210,8 +296,13 @@ document.addEventListener('click', e => {
       return;
     }
     b.disabled = true;
+    /* The BOX, not PENDING_TEXT. Test read the field and Save read the raw
+       Whisper output, so correcting a transcript produced a good preview and
+       then silently saved the uncorrected text — the saved voice never
+       matched the one that was auditioned. */
+    const said = (document.getElementById('lab-reftext') || {}).value || '';
     post('/api/tts/voice-refs', { action: 'commit', pending: PENDING,
-                                  label, transcript: PENDING_TEXT })
+                                  label, transcript: said })
       .then(r => {
         b.disabled = false;
         if (!r.ok) { note.className='try-note bad';
@@ -263,9 +354,10 @@ function proposed() {
    as soon as launchd accepts it and the model load takes ~30s after that.
    Reporting success early is what made "loading" look like it did nothing,
    and then made Test hit a service that was not up. */
-function waitReady(seconds) {
+function waitReady(seconds, endpoint) {
   const deadline = Date.now() + seconds * 1000;
-  const tick = () => fetch('/api/tts/health', { headers: { Accept: 'application/json' } })
+  const url = endpoint || '/api/tts/health';
+  const tick = () => fetch(url, { headers: { Accept: 'application/json' } })
     .then(r => r.json())
     .then(h => {
       if (h && h.ready) return true;
@@ -329,12 +421,46 @@ document.addEventListener('click', e => {
     return;
   }
 
-  if (btn.id === 'lab-apply' || btn.id === 'lab-load') {
-    const applying = btn.id === 'lab-apply';
-    const note = document.getElementById(applying ? 'lab-apply-note' : 'lab-note');
+  if (btn.id === 'lab-load') {
+    const note = document.getElementById('lab-note');
+    const model = document.getElementById('lab-controls').dataset.model;
+    const clones = modeOf(model) === 'base';
     btn.disabled = true;
     note.className = 'try-note';
-    note.textContent = applying ? 'Saving…' : 'Loading those weights…';
+    note.textContent = 'Loading those weights into the lab — about 30 seconds…';
+    post('/api/settings', { values: { VOICES_MODEL: model } }).then(r => {
+      if (!r.ok) {
+        note.className = 'try-note bad';
+        note.textContent = (r.data && r.data.error) || 'Could not load that.';
+        btn.disabled = false;
+        return;
+      }
+      return post('/api/service', { service: 'voices', action: 'restart' })
+        .then(() => waitReady(120, '/api/voices/health'))
+        .then(ok => {
+          btn.disabled = false;
+          if (!ok) {
+            note.className = 'try-note bad';
+            note.textContent = 'The lab service did not come back. Check its log.';
+            return;
+          }
+          note.className = clones ? 'try-note' : 'try-note bad';
+          note.textContent = clones
+            ? 'Loaded. Test away — Athena is untouched.'
+            : 'Loaded. Athena is untouched, but /tts in Discord cannot clone '
+              + 'saved voices until a cloning checkpoint is loaded again.';
+          return refreshLive().then(controls);
+        });
+    });
+    return;
+  }
+
+  if (btn.id === 'lab-apply') {
+    const applying = true;
+    const note = document.getElementById('lab-apply-note');
+    btn.disabled = true;
+    note.className = 'try-note';
+    note.textContent = 'Saving…';
     post('/api/settings', { values: proposed() }).then(r => {
       if (!r.ok) {
         note.className = 'try-note bad';
@@ -397,6 +523,9 @@ document.addEventListener('change', e => {
        reduces the clip to a speaker embedding and smooths rasp away. Testing
        one and saving the other would be a preview that lies. */
     document.getElementById('lab-reftext').value = PENDING_TEXT;
+    const ra = document.getElementById('lab-refaudio');
+    if (ra) { ra.src = '/api/tts/clip?name=' + encodeURIComponent(PENDING);
+              ra.hidden = false; }
     const box = document.getElementById('lab-pending');
     if (box) box.hidden = false;
     note.className = 'try-note';
@@ -407,4 +536,159 @@ document.addEventListener('change', e => {
   }).finally(() => { input.value = ''; });
 });
 
-refreshLive().then(controls);
+if (document.getElementById('lab-controls')) refreshLive().then(controls);
+
+/* ---- The library -------------------------------------------------------
+   Every clip on the machine, listed so it can be removed. Saved voices and
+   unsaved candidates are the same kind of thing at different stages, so they
+   share a renderer and differ only in which button they get.
+
+   Delete is administrators only, and the server enforces that independently.
+   Hiding the button here is courtesy, not security: a General User who forges
+   the request still gets a 403 from _voice_refs. */
+const IS_ADMIN = (document.body.dataset.role || '') === 'admin';
+
+function libRow(v, pending) {
+  const when = pending
+    ? `uploaded ${v.age_hours}h ago`
+    : (v.added ? escapeHtml(v.added) : '') +
+      (v.added_by ? ` · by ${escapeHtml(v.added_by)}` : '');
+  const said = v.transcript
+    ? `<span class="lib-said">“${escapeHtml(v.transcript.slice(0, 80))}${
+         v.transcript.length > 80 ? '…' : ''}”</span>`
+    : '<span class="lib-said warn">no transcript — this clip clones as a '
+      + 'speaker average and loses rasp and accent</span>';
+  /* The transcript is editable in place. It is the field that decides clone
+     quality, and Whisper gets it wrong often enough that a library you cannot
+     correct is a library of quietly mediocre voices. */
+  const edit = `<button type="button" class="ghost lib-edit"
+      data-file="${escapeHtml(v.file)}">Edit transcript</button>`;
+  const player = `<audio class="lib-audio" controls preload="none"
+      src="/api/tts/clip?name=${encodeURIComponent(v.file)}"></audio>`;
+  const form = `<div class="lib-edit-box" hidden>
+      <textarea rows="3" class="lib-text">${escapeHtml(v.transcript || '')}</textarea>
+      <button type="button" class="lib-save-text"
+              data-file="${escapeHtml(v.file)}">Save transcript</button>
+      <button type="button" class="ghost lib-cancel">Cancel</button>
+    </div>`;
+  const keep = `<div class="lib-edit-box" hidden>
+      <input type="text" class="lib-name" placeholder="Name this voice">
+      <textarea rows="3" class="lib-text"
+        placeholder="What the recording says — accuracy here decides whether the clone keeps its texture">${escapeHtml(v.transcript || '')}</textarea>
+      <button type="button" class="lib-keep" data-file="${escapeHtml(v.file)}">Save to library</button>
+      <button type="button" class="ghost lib-cancel">Cancel</button>
+    </div>`;
+  const act = pending
+    ? `<button type="button" class="ghost lib-edit" data-file="${escapeHtml(v.file)}">Keep this</button>
+       <button type="button" class="ghost lib-discard" data-file="${escapeHtml(v.file)}">Discard</button>`
+    : (IS_ADMIN
+        ? `<button type="button" class="ghost lib-delete" data-file="${escapeHtml(v.file)}" data-label="${escapeHtml(v.label)}">Delete</button>`
+        : '');
+  return `<li class="lib-row">
+    <div class="lib-main">
+      <strong>${escapeHtml(v.label)}</strong>
+      <span class="lib-meta">${v.seconds}s${when ? ' · ' + when : ''}</span>
+      ${said}
+      ${player}
+      ${pending ? keep : form}
+    </div>
+    <div class="lib-act">${pending ? '' : edit}${act}</div>
+  </li>`;
+}
+
+function loadLibrary() {
+  const box = document.getElementById('lab-library-body');
+  if (!box) return Promise.resolve();
+  return api('/api/tts/voice-refs').then(d => {
+    const saved = d.voices || [], waiting = d.unsaved || [];
+    let html = '';
+    html += saved.length
+      ? `<ul class="lib">${saved.map(v => libRow(v, false)).join('')}</ul>`
+      : '<p class="sub">No saved voices yet.</p>';
+    if (waiting.length) {
+      html += `<h4>Uploaded but never saved (${waiting.length})</h4>
+        <p class="sub">Candidates from an upload that was not named and saved.
+           They are not usable as voices and are cleared automatically after
+           six hours, but only when something else is uploaded.</p>
+        <ul class="lib">${waiting.map(v => libRow(v, true)).join('')}</ul>`;
+    }
+    box.innerHTML = html;
+  }).catch(() => {
+    box.innerHTML = '<p class="sub bad">Could not read the library.</p>';
+  });
+}
+
+document.addEventListener('click', e => {
+  const ed = e.target.closest('.lib-edit');
+  if (ed) {
+    const box = ed.closest('.lib-row').querySelector('.lib-edit-box');
+    box.hidden = !box.hidden;
+    if (!box.hidden) box.querySelector('.lib-text').focus();
+    return;
+  }
+  const cancel = e.target.closest('.lib-cancel');
+  if (cancel) { cancel.closest('.lib-edit-box').hidden = true; return; }
+  const keepBtn = e.target.closest('.lib-keep');
+  if (keepBtn) {
+    const box = keepBtn.closest('.lib-edit-box');
+    const label = box.querySelector('.lib-name').value.trim();
+    if (!label) { toast('Give it a name first.'); return; }
+    keepBtn.disabled = true; keepBtn.textContent = 'Saving…';
+    post('/api/tts/voice-refs', { action: 'commit',
+          pending: keepBtn.dataset.file, label,
+          transcript: box.querySelector('.lib-text').value })
+      .then(r => {
+        if (!r || !r.ok || (r.data && r.data.ok === false)) {
+          keepBtn.disabled = false; keepBtn.textContent = 'Save to library';
+          toast((r && r.data && r.data.error) || 'Could not save it.');
+          return;
+        }
+        toast(`Saved as "${r.data.name}".`);
+        return loadLibrary().then(loadSaved);
+      });
+    return;
+  }
+  const sv = e.target.closest('.lib-save-text');
+  if (sv) {
+    const box = sv.closest('.lib-edit-box');
+    sv.disabled = true; sv.textContent = 'Saving…';
+    post('/api/tts/voice-refs', { action: 'set-transcript',
+          name: sv.dataset.file,
+          transcript: box.querySelector('.lib-text').value })
+      .then(r => {
+        if (!r || !r.ok || (r.data && r.data.ok === false)) {
+          sv.disabled = false; sv.textContent = 'Save transcript';
+          toast((r && r.data && r.data.error) || 'Could not save it.');
+          return;
+        }
+        toast('Transcript saved.');
+        return loadLibrary().then(loadSaved);
+      });
+    return;
+  }
+  const del = e.target.closest('.lib-delete');
+  const dis = e.target.closest('.lib-discard');
+  const btn = del || dis;
+  if (!btn) return;
+  const file = btn.dataset.file;
+  if (del && !confirm(`Delete "${btn.dataset.label}" permanently?\n\n`
+                    + 'The clip and its transcript are removed. Anything using '
+                    + 'it falls back to a default voice.')) return;
+  btn.disabled = true;
+  btn.textContent = del ? 'Deleting…' : 'Discarding…';
+  post('/api/tts/voice-refs', del ? { action: 'delete', name: file }
+                                  : { action: 'discard', pending: file })
+    .then(r => {
+      if (!r || !r.ok || (r.data && r.data.ok === false)) {
+        btn.disabled = false;
+        btn.textContent = del ? 'Delete' : 'Discard';
+        toast((r.data && r.data.error) || 'Could not remove it.');
+        return;
+      }
+      /* Both lists can change: deleting a saved voice may be the one the
+         picker had selected, so rebuild that too. */
+      return loadLibrary().then(loadSaved);
+    });
+});
+
+loadLibrary();

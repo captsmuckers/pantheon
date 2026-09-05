@@ -88,8 +88,38 @@ def _new_session(user: str = "", role: str = "admin") -> str:
             if rec["exp"] < now:
                 del SESSIONS[k]
         SESSIONS[token] = {"exp": now + SESSION_LIFETIME, "user": user,
-                           "role": role}
+                           "role": role, "seen": now}
     return token
+
+
+def active_users() -> list:
+    """Everyone with a live session, most recently active first.
+
+    The lab is one shared process and the panel is open on several machines at
+    once. Knowing that moxx is here BEFORE loading a checkpoint out from under
+    him is the difference between a conversation and a mystery.
+
+    Deduplicated by account: two tabs are one person, not two.
+    """
+    now = time.time()
+    best: dict = {}
+    with _LOCK:
+        for rec in SESSIONS.values():
+            if rec["exp"] < now:
+                continue
+            u = rec.get("user") or ""
+            seen = rec.get("seen", 0.0)
+            if u not in best or seen > best[u]["seen"]:
+                best[u] = {"user": u, "role": rec.get("role", ""), "seen": seen}
+    return sorted(best.values(), key=lambda r: -r["seen"])
+
+
+def _touch(token: str) -> None:
+    """Mark a session as active now. Called on each authenticated request."""
+    with _LOCK:
+        rec = SESSIONS.get(token or "")
+        if rec is not None:
+            rec["seen"] = time.time()
 
 
 def _session_of(token: str) -> dict:
@@ -129,7 +159,11 @@ VOICE_REF_MAX = 60_000_000
 # administrator-only and refused in dispatch, before any handler runs, so it
 # cannot be reached by a crafted request from a signed-in friend.
 USER_PATHS = frozenset({
-    "/", "/voice",                 # status, and the voice page
+    "/", "/voice", "/library",     # status, the voice page, and the library
+    "/api/tts/clip",               # hearing a clip is how a transcript is checked
+    "/api/whoami",                 # who am I, and may I sign out
+    "/api/lab-state",              # what the shared lab has loaded, and whose
+    "/api/who",                    # who else is on the panel right now
     "/api/status", "/api/logout",
     "/api/tts/voices", "/api/tts/preview", "/api/tts/voice-ref",
     "/api/tts/health", "/api/tts/voice-refs", "/api/voices/health",
@@ -307,7 +341,11 @@ class Handler(BaseHTTPRequestHandler):
             # otherwise), and anything that can reach loopback can read .env
             # directly. A password would be theatre.
             return True
-        return _valid_session(self._cookies().get("athena_session", ""))
+        tok = self._cookies().get("athena_session", "")
+        if not _valid_session(tok):
+            return False
+        _touch(tok)
+        return True
 
     def _session(self) -> dict:
         return _session_of(self._cookies().get("athena_session", ""))
@@ -411,6 +449,8 @@ class Handler(BaseHTTPRequestHandler):
             self._html(pages.settings_page())
         elif path == "/voice":
             self._html(pages.voice_page(self._role()))
+        elif path == "/library":
+            self._html(pages.library_page(self._role()))
         elif path == "/logs":
             self._html(pages.logs_page())
         elif path == "/security":
@@ -452,6 +492,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, services.tts_health())
         elif path == "/api/tts/voice-refs":
             self._json(200, services.voice_refs())
+        elif path == "/api/who":
+            self._json(200, {"users": active_users(),
+                             "me": self._session().get("user", "")})
+        elif path == "/api/lab-state":
+            self._json(200, services.lab_state())
+        elif path == "/api/whoami":
+            sess = self._session()
+            self._json(200, {"user": sess.get("user", ""), "role": self._role()})
+        elif path == "/api/tts/clip":
+            data = services.clip_bytes((query.get("name") or [""])[0])
+            if data is None:
+                self._fail(404, "No such clip.")
+            else:
+                self._send(200, data, "audio/wav", {"Cache-Control": "no-store"})
         elif path == "/api/voices/health":
             self._json(200, services.voices_health())
         else:
@@ -468,11 +522,19 @@ class Handler(BaseHTTPRequestHandler):
             # TTS_QWEN_MODEL needs the speech service, so "you may change the
             # voice but not apply it" would be a setting that silently does
             # nothing. Stop is not offered — only restart.
-            if not self._is_admin() and (service not in ("bot", "tts")
+            # "voices" is the lab's own service. Loading a different kind of
+            # voice to try it is the one thing the lab is for, and it does not
+            # touch Athena — so refusing it here made the lab useless to
+            # exactly the people it was built for.
+            if not self._is_admin() and (service not in ("bot", "tts", "voices")
                                          or action != "restart"):
                 self._json(403, {"ok": False,
                                  "error": "Administrators only."})
                 return
+            if service == "voices" and action == "restart":
+                services.note_lab_load(
+                    self._session().get("user", ""),
+                    (services.envfile_values().get("VOICES_MODEL") or "").strip())
             result = services.act(service, action)
             self._json(200 if result["ok"] else 500, result)
         elif path == "/api/settings":
@@ -653,6 +715,15 @@ class Handler(BaseHTTPRequestHandler):
                                           "saved voice."})
                 return
             self._json(200, services.delete_voice_ref(name))
+            return
+        if action == "bake":
+            self._json(200, services.bake_voice_ref(
+                str(body.get("label", "")), str(body.get("instruct", "")),
+                str(body.get("voice", "")), self._session().get("user", "")))
+            return
+        if action == "set-transcript":
+            self._json(200, services.set_voice_ref_text(
+                name, str(body.get("transcript", ""))))
             return
         if action == "transcribe":
             self._json(200, services.describe_voice_ref(name))
@@ -975,8 +1046,14 @@ def _save_settings(body: dict, role: str = "admin"):
     if role != "admin":
         forbidden = sorted((set(values) | set(clear)) - set(prefs.USER_SETTINGS))
         if forbidden:
+            # Setting names are what the code calls them, not what the person
+            # was trying to do. "Administrators only: TTS_ENGINE" reads as a
+            # broken feature; saying which action is reserved does not.
             return 403, {"ok": False,
-                         "error": "Administrators only: " + ", ".join(forbidden)}
+                         "error": "Only an administrator can change what "
+                                  "Athena herself uses. You can still load, "
+                                  "test and save voices in the lab. "
+                                  "(Reserved: " + ", ".join(forbidden) + ")"}
 
     # Settings that become command-line arguments to the speech service, and
     # so cannot contain whitespace. Learned the hard way: a placeholder option
@@ -1030,14 +1107,18 @@ def _saved_message(moved: list) -> str:
     if not moved:
         return "No changes to save."
     what = sorted(schema.restarts_for(moved))
-    names = {"bot": "Athena", "tts": "Speech"}
+    # Every restart target a setting can name must appear here. A missing one
+    # is a KeyError raised while BUILDING the success message — the save has
+    # already happened, so the change lands and the page still reports that
+    # something went wrong.
+    names = {"bot": "Athena", "tts": "Speech", "voices": "Saved voices"}
     if not what:
         return f"Saved {len(moved)} setting{'s' if len(moved) != 1 else ''}."
     # config.py calls load_dotenv() once at import and freezes the result, so a
     # saved setting genuinely does nothing until the process restarts. Saying so
     # every time is far better than a page that appears to apply changes live.
     return (f"Saved {len(moved)} setting{'s' if len(moved) != 1 else ''}. "
-            f"Restart {' and '.join(names[w] for w in what)} to apply.")
+            f"Restart {' and '.join(names.get(w, w) for w in what)} to apply.")
 
 
 # -------------------------------------------------------------------- lifecycle

@@ -49,3 +49,69 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
+
+/* Who is signed in, and a way to stop being them. The panel is shared with
+   friends on a machine nobody locks, so "sign out" is not a formality. */
+(function () {
+  const label = document.getElementById('whoami');
+  const btn = document.getElementById('signout');
+  if (!label && !btn) return;                 // login page has no chrome
+  api('/api/whoami').then(d => {
+    if (!label || !d || !d.user) return;
+    label.textContent = d.user + (d.role === 'admin' ? ' · administrator' : '');
+  }).catch(() => {});
+  if (btn) btn.addEventListener('click', () => {
+    btn.disabled = true;
+    post('/api/logout').then(() => { location.href = '/login'; })
+      .catch(() => { btn.disabled = false; toast('Could not sign out.'); });
+  });
+})();
+
+/* The shared-lab banner. One process serves every signed-in person, so the
+   checkpoint someone else loads replaces yours without warning. Saying what is
+   loaded and who loaded it turns a confusing failure into a visible fact. */
+(function () {
+  const bar = document.getElementById('labbar');
+  if (!bar) return;
+  const KINDS = { base: 'Clone a voice from a recording',
+                  voicedesign: 'Describe the voice you want',
+                  customvoice: "One of Qwen's 9 ready-made voices" };
+  const ago = t => {
+    if (!t) return '';
+    const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60));
+    return m < 1 ? 'just now' : m === 1 ? '1 minute ago' : m + ' minutes ago';
+  };
+  /* Who else is here matters more than what is loaded: the checkpoint can be
+     reloaded, but only a person can be asked to wait. */
+  const roster = w => {
+    if (!w || !w.users || !w.users.length) return '';
+    const others = w.users.filter(u => u.user !== w.me);
+    if (!others.length) return '<span class="labbar-alone">only you</span>';
+    return 'also here: ' + others.map(u =>
+      `<strong>${escapeHtml(u.user)}</strong>` +
+      (Date.now() / 1000 - u.seen > 300 ? ` (idle ${ago(u.seen)})` : '')
+    ).join(', ');
+  };
+  const paint = () => Promise.all([
+    api('/api/who').catch(() => null),
+    api('/api/lab-state').catch(() => null)
+  ]).then(([w, d]) => {
+    const parts = [];
+    const people = roster(w);
+    if (people) parts.push(people);
+    if (d && d.mode) {
+      const kind = KINDS[d.mode] || d.mode;
+      const who = d.user ? ` (loaded by <strong>${escapeHtml(d.user)}</strong> ${ago(d.at)})` : '';
+      parts.push(`voice lab: <strong>${escapeHtml(kind)}</strong>${who}`);
+      if (d.mode !== 'base') {
+        parts.push('<span class="labbar-warn">/tts cloning unavailable while '
+                 + 'this is loaded</span>');
+      }
+    }
+    if (!parts.length) { bar.hidden = true; return; }
+    bar.innerHTML = parts.join(' · ');
+    bar.hidden = false;
+  }).catch(() => {});
+  paint();
+  setInterval(paint, 15000);
+})();

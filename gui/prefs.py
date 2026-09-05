@@ -121,6 +121,7 @@ USER_SETTINGS = (
     "TTS_VOICE_REF",        # an uploaded clip to clone
     "TTS_VOICE_REF_TEXT",   # what is said in it
     "TTS_QWEN_MODEL",       # preset / described / cloned - the kind of voice
+    "VOICES_MODEL",         # what the LAB loads - never touches Athena
 )
 
 

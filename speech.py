@@ -835,6 +835,12 @@ def saved_voices() -> list:
     d = ROOT / "tts" / "voices" if "ROOT" in globals() else Path("tts/voices")
     try:
         for wav in sorted(Path(d).glob("*.wav")):
+            # Skip candidates. An upload is staged in this same directory
+            # under a prefix until somebody saves it, and the panel's own
+            # listing filters those out — this one did not, so /voices and
+            # /tts offered clips nobody had chosen to keep.
+            if wav.name.startswith("pending--"):
+                continue
             label = wav.stem.replace("_", " ")
             side = wav.with_suffix(".json")
             if side.exists():

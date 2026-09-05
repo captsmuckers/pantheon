@@ -481,34 +481,53 @@ def voice_refs() -> dict:
     rather than blocking the listing.
     """
     VOICES_DIR.mkdir(parents=True, exist_ok=True)
-    out = []
+    out, waiting = [], []
     for wav in sorted(VOICES_DIR.glob("*.wav")):
         if wav.name.startswith(PENDING):
-            continue
-        meta = {}
-        side = _sidecar(wav)
-        if side.exists():
-            try:
-                meta = json.loads(side.read_text("utf-8"))
-            except (ValueError, OSError):
-                meta = {}
+            waiting.append(_describe(wav))
+        else:
+            out.append(_describe(wav))
+    return {"voices": out, "count": len(out),
+            "unsaved": waiting, "unsaved_count": len(waiting)}
+
+
+def _describe(wav: Path) -> dict:
+    """One clip as the library sees it: the file, plus what is known about it.
+
+    Pending candidates get the same shape as saved ones on purpose. They are
+    the same kind of thing at a different stage, and the library has to be
+    able to show and delete both.
+    """
+    meta = {}
+    side = _sidecar(wav)
+    if side.exists():
         try:
-            import wave as _w
-            with _w.open(str(wav)) as w:
-                seconds = round(w.getnframes() / w.getframerate(), 1)
-        except Exception:
-            seconds = 0.0
-        out.append({
-            "name": wav.stem,
-            "path": str(wav.relative_to(ROOT)),
-            "label": meta.get("label") or wav.stem.replace("_", " "),
-            "transcript": meta.get("transcript", ""),
-            "added_by": meta.get("added_by", ""),
-            "added": meta.get("added", ""),
-            "seconds": seconds,
-            "needs_transcript": not meta.get("transcript"),
-        })
-    return {"voices": out, "count": len(out)}
+            meta = json.loads(side.read_text("utf-8"))
+        except (ValueError, OSError):
+            meta = {}
+    try:
+        import wave as _w
+        with _w.open(str(wav)) as w:
+            seconds = round(w.getnframes() / w.getframerate(), 1)
+    except Exception:
+        seconds = 0.0
+    try:
+        age_hours = round((time.time() - wav.stat().st_mtime) / 3600, 1)
+    except OSError:
+        age_hours = 0.0
+    stem = wav.stem
+    return {
+        "name": stem,
+        "file": wav.name,
+        "path": str(wav.relative_to(ROOT)),
+        "label": meta.get("label") or stem.replace(PENDING, "").replace("_", " "),
+        "transcript": meta.get("transcript", ""),
+        "added_by": meta.get("added_by", ""),
+        "added": meta.get("added", ""),
+        "seconds": seconds,
+        "age_hours": age_hours,
+        "needs_transcript": not meta.get("transcript"),
+    }
 
 
 def _sweep_pending(max_age_hours: float = 6.0) -> None:
@@ -586,6 +605,178 @@ def describe_voice_ref(name: str) -> dict:
     _sidecar(wav).write_text(json.dumps(meta, indent=2), "utf-8")
     return {"ok": True, "transcript": text,
             "note": "" if text else "Could not transcribe it — type what is said."}
+
+
+# Long enough to be a usable reference and varied enough to carry the voice:
+# the same passage every time, so two baked voices differ only by the thing
+# that made them differ. Read aloud it runs 25-30 seconds.
+BAKE_TEXT = (
+    "The room is quiet again, which is how I prefer it. I run the films, the "
+    "music and the lights, and I keep the schedule that everyone else forgets. "
+    "Ask me for something and you will get it, though I reserve the right to "
+    "comment on the choice. Yes, that was a judgement. No, I will not "
+    "apologise for it. Now, shall we begin, or would you rather stand there "
+    "reading the menu for another five minutes?")
+
+
+def bake_voice_ref(label: str = "", instruct: str = "", voice: str = "",
+                   added_by: str = "") -> dict:
+    """Turn a described or ready-made voice into a clip the library can hold.
+
+    A designed voice is words, not audio, so there is nothing to save and
+    nothing /tts could clone from — it would need the VoiceDesign checkpoint
+    loaded, which is exactly what cloning cannot use. Speaking a fixed passage
+    in that voice and keeping the audio makes it an ordinary library clip:
+    usable from /tts, on the cloning checkpoint, alongside every other voice.
+
+    The transcript is not transcribed, it is KNOWN — we chose the words. So a
+    baked voice starts with a perfect reference text, which is the one thing
+    uploads can never guarantee.
+    """
+    # Baking on the wrong checkpoint does not fail, it just speaks in a
+    # generic voice: Base ignores `instruct`, VoiceDesign ignores `voice`. The
+    # result is a plausible clip that is not the voice anyone asked for, saved
+    # under its name. Refuse instead.
+    want = "voicedesign" if instruct else "customvoice"
+    try:
+        have = (voices_health() or {}).get("qwen_mode", "")
+    except Exception:
+        have = ""
+    if have and have != want:
+        kind = {"voicedesign": "a described voice",
+                "customvoice": "a ready-made voice"}[want]
+        return {"ok": False,
+                "error": f"The lab is loaded with a different kind of voice, "
+                         f"so it cannot speak {kind} yet. Press “Load it for "
+                         f"testing” first, then save."}
+    wav, err = preview(voice=voice, lang="auto", text=BAKE_TEXT,
+                       instruct=instruct, voices=True)
+    if err:
+        return {"ok": False, "error": err.get("error", "Could not speak that.")}
+    import datetime
+    _sweep_pending()
+    # Saved outright, not staged. Staging exists so a Whisper transcript can be
+    # checked before it is committed; this transcript is the passage we chose,
+    # so there is nothing to check — and the voice itself was already
+    # auditioned with Test before anyone pressed save. A second naming step
+    # would be ceremony.
+    stem = _SAFE_NAME.sub("_", (label or "").strip()).strip("._-")[:48] or "designed"
+    dest = VOICES_DIR / f"{stem}.wav"
+    n = 2
+    while dest.exists():
+        dest = VOICES_DIR / f"{stem}-{n}.wav"
+        n += 1
+    try:
+        dest.write_bytes(wav)
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not write it: {exc}"}
+    try:
+        import wave as _w
+        with _w.open(str(dest)) as w:
+            seconds = round(w.getnframes() / w.getframerate(), 1)
+    except Exception:
+        seconds = 0.0
+    _sidecar(dest).write_text(json.dumps({
+        "transcript": BAKE_TEXT,
+        "label": (label or dest.stem).strip(),
+        "added_by": added_by,
+        "added": datetime.date.today().isoformat(),
+        "designed": instruct or voice,
+    }, indent=2), "utf-8")
+    return {"ok": True, "name": dest.stem,
+            "path": str(dest.relative_to(ROOT)),
+            "label": label, "transcript": BAKE_TEXT,
+            "seconds": seconds, **voice_refs()}
+
+
+LAB_STATE = ROOT / "logs" / "lab-state.json"
+
+
+def note_lab_load(user: str, model: str) -> None:
+    """Record who last loaded a checkpoint into the lab, and when.
+
+    The lab is one shared process. Two people on the panel at once will each
+    load the kind of voice they want and take the other's away mid-test, with
+    nothing on screen to say it happened or who did it. This is what the
+    banner reads.
+    """
+    try:
+        LAB_STATE.parent.mkdir(parents=True, exist_ok=True)
+        LAB_STATE.write_text(json.dumps(
+            {"user": user, "model": model, "at": time.time()}, indent=2), "utf-8")
+    except OSError:
+        pass
+
+
+def lab_state() -> dict:
+    """Who loaded what into the lab, merged with what is actually running."""
+    out = {"user": "", "model": "", "at": 0.0}
+    try:
+        out.update(json.loads(LAB_STATE.read_text("utf-8")))
+    except (OSError, ValueError):
+        pass
+    try:
+        h = voices_health() or {}
+    except Exception:
+        h = {}
+    out["mode"] = h.get("qwen_mode", "")
+    out["ready"] = bool(h.get("ready"))
+    # The record is only about the RUNNING checkpoint. If someone saved a
+    # different one without loading it, the name attached to the old load
+    # would be wrong.
+    if out.get("model") and h.get("qwen_model") and out["model"] != h["qwen_model"]:
+        out["user"] = ""
+    return out
+
+
+def clip_bytes(name: str) -> bytes | None:
+    """One stored clip, for playing back in the browser.
+
+    Checking a transcript means hearing the recording, and there was no way to
+    do that from the panel at all. Saved clips and pending candidates are both
+    playable — a candidate is exactly the thing whose transcript most needs
+    checking, before it is committed.
+
+    The name is reduced to a bare filename and the resolved path is required
+    to sit inside the voices directory, so a crafted name cannot walk out of
+    it and turn this into a file-read primitive.
+    """
+    leaf = Path(name).name
+    if not leaf.endswith(".wav"):
+        return None
+    target = (VOICES_DIR / leaf).resolve()
+    if not target.is_relative_to(VOICES_DIR.resolve()) or not target.is_file():
+        return None
+    try:
+        return target.read_bytes()
+    except OSError:
+        return None
+
+
+def set_voice_ref_text(name: str, text: str) -> dict:
+    """Correct what a saved clip says.
+
+    Whisper is the first guess, not the answer, and the transcript is the one
+    field that decides whether a clone keeps its texture: with it Qwen
+    conditions on the waveform, without it the clip collapses to a speaker
+    average. Somebody who has heard the clip is a better transcriber than a
+    small model run unattended, so this exists.
+    """
+    wav = VOICES_DIR / f"{_voice_ref_name(name)}"
+    if not wav.exists():
+        return {"ok": False, "error": "No such saved voice."}
+    meta = {}
+    if _sidecar(wav).exists():
+        try:
+            meta = json.loads(_sidecar(wav).read_text("utf-8"))
+        except (ValueError, OSError):
+            meta = {}
+    meta["transcript"] = text.strip()
+    try:
+        _sidecar(wav).write_text(json.dumps(meta, indent=2), "utf-8")
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not save it: {exc}"}
+    return {"ok": True, **voice_refs()}
 
 
 def delete_voice_ref(name: str) -> dict:
@@ -685,6 +876,7 @@ def save_voice_ref(data: bytes, filename: str, start: float = 0.0,
                 "pending": out_path.name,
                 "path": str(out_path.relative_to(ROOT)),
                 "label": label,
+                "transcript": text,
                 "seconds": round(seconds, 1),
                 "note": note,
                 **voice_refs()}

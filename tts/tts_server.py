@@ -773,8 +773,22 @@ class Handler(BaseHTTPRequestHandler):
         instruct = (payload.get("instruct") or "").strip()
         # Same reasoning as instruct: auditioning a clone must not need a
         # restart. Validated against the voices directory, never trusted raw.
-        ref_audio = _safe_ref((payload.get("ref_audio") or "").strip())
+        asked_ref = (payload.get("ref_audio") or "").strip()
+        ref_audio = _safe_ref(asked_ref)
         ref_text = (payload.get("ref_text") or "").strip()
+        # An explicit reference that does not resolve must FAIL, not quietly
+        # become a different voice. _safe_ref returns "" for anything it will
+        # not serve, and the dispatch below reads that as "no reference given"
+        # and falls back to VOICE_REF — so asking to clone a clip that has
+        # been renamed, saved or discarded played Athena's configured voice
+        # instead, with every layer reporting success. That is the hardest
+        # possible way to be told a path is stale.
+        if asked_ref and not ref_audio:
+            self._json(400, {
+                "error": f"No such voice clip: {Path(asked_ref).name!r}. It may "
+                         "have been renamed, saved under a new name, or "
+                         "discarded — pick it again from the library."})
+            return
         if not text:
             self._json(400, {"error": "no text"})
             return
