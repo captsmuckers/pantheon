@@ -40,8 +40,12 @@ function widget(f) {
               data-name="${f.name}" ${on ? 'checked' : ''}> enabled</label>`;
   }
   if (f.kind === 'choice') {
-    const opts = f.choices.map(c =>
-      `<option value="${escapeHtml(c)}" ${c === v ? 'selected' : ''}>${escapeHtml(c || '(blank)')}</option>`
+    /* Show the label where there is one. The VALUE stays the real setting —
+       a HuggingFace repo path in this case — so nothing downstream changes;
+       only what a person reads does. */
+    const labels = f.choice_labels || [];
+    const opts = f.choices.map((c, i) =>
+      `<option value="${escapeHtml(c)}" ${c === v ? 'selected' : ''}>${escapeHtml(labels[i] || c || '(blank)')}</option>`
     ).join('');
     /* Only offer an unlisted value when there actually is one. An empty value
        is "not set", which the default now covers, not a mystery choice. */

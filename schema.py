@@ -83,6 +83,12 @@ class Setting:
     # silently applies nothing is the single most confusing thing this UI can
     # do — the same trap TTS_VOICE fell into when its restart target was wrong.
     applies: tuple = ()
+    # Human labels for `choices`, in the same order. A dropdown whose options
+    # are raw HuggingFace repo paths is unreadable, and worse than unreadable
+    # here: "Base" means CLONING and "CustomVoice" means Qwen's OWN nine
+    # voices, which reads as exactly the opposite of what it does. Anything
+    # without a label falls back to the value.
+    choice_labels: tuple = ()
 
     def is_secret(self) -> bool:
         return self.kind == "secret"
@@ -294,6 +300,13 @@ SETTINGS: tuple[Setting, ...] = (
            "mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit",
            "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
            "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+       ),
+       choice_labels=(
+           "One of Qwen's 9 ready-made voices  (better quality)",
+           "One of Qwen's 9 ready-made voices  (faster)",
+           "A voice from a written description",
+           "Clone a voice from a recording  (better quality)",
+           "Clone a voice from a recording  (faster)",
        ),
        applies=("qwen:base", "qwen:customvoice", "qwen:voicedesign"),
        section="Speech", restart="tts",

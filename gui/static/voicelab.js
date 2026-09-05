@@ -11,13 +11,20 @@
 let LIVE = {};        // what the running service is actually doing
 let FIELDS = {};      // the schema entries we are allowed to see
 
+/* The three kinds, in the words that describe what they DO. Qwen's own names
+   are actively misleading here — "Base" is the one that clones and
+   "CustomVoice" is Qwen's own nine voices, which reads as the opposite — so
+   the repo path is never shown to anyone. */
 const MODES = [
-  ['mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit', 'Pick a ready-made voice',
-   'Nine voices built into the model. Only Ryan and Aiden are natively English.'],
-  ['mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit', 'Describe a voice',
-   'Write what she should sound like. The wording matters more than you expect.'],
-  ['mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit', 'Copy a voice from a recording',
-   'Upload a clip. Only the first 6 seconds decide who it sounds like.'],
+  ['mlx-community/Qwen3-TTS-12Hz-1.7B-CustomVoice-8bit',
+   'Use one of Qwen\u2019s 9 ready-made voices',
+   'Voices built into the model. Nothing to upload. Only Ryan and Aiden are natively English.'],
+  ['mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-8bit',
+   'Describe the voice you want, in words',
+   'No recording needed \u2014 write what she should sound like. This is what Athena uses by default.'],
+  ['mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit',
+   'Clone a voice from a recording',
+   'Uses your saved voices, or a clip you upload. This is the only kind that uses them.'],
 ];
 
 function modeOf(model) {

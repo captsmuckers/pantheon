@@ -882,6 +882,7 @@ def _settings_payload(role: str = "admin") -> dict:
             "required": s.required, "advanced": s.advanced, "restart": s.restart,
             "choices": list(s.choices), "lo": s.lo, "hi": s.hi,
             "applies": list(s.applies),
+            "choice_labels": list(s.choice_labels),
             "default": s.default if not isinstance(s.default, bool)
                        else ("true" if s.default else "false"),
         }
