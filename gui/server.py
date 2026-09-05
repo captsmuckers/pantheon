@@ -132,6 +132,7 @@ USER_PATHS = frozenset({
     "/", "/voice",                 # status, and the voice page
     "/api/status", "/api/logout",
     "/api/tts/voices", "/api/tts/preview", "/api/tts/voice-ref",
+    "/api/tts/health",
     "/api/settings",               # FILTERED by role - see _settings_for_role
     "/api/service",                # RESTRICTED to bot/tts restart - see _service
 })
@@ -446,6 +447,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, _languages())
         elif path == "/api/tts/voices":
             self._json(200, services.voices())
+        elif path == "/api/tts/health":
+            self._json(200, services.tts_health())
         else:
             self._fail(404, "No such page.")
 
@@ -849,6 +852,7 @@ def _settings_payload(role: str = "admin") -> dict:
             "name": s.name, "kind": s.kind, "help": s.help, "section": s.section,
             "required": s.required, "advanced": s.advanced, "restart": s.restart,
             "choices": list(s.choices), "lo": s.lo, "hi": s.hi,
+            "applies": list(s.applies),
             "default": s.default if not isinstance(s.default, bool)
                        else ("true" if s.default else "false"),
         }
@@ -867,7 +871,22 @@ def _settings_payload(role: str = "admin") -> dict:
         fields.append(entry)
     sections = (list(schema.SECTIONS) if allowed is None
                 else sorted({f["section"] for f in fields}))
+    # The engine and mode currently in .env, sent regardless of whether the
+    # fields themselves were. A General User cannot change TTS_ENGINE and so
+    # is not sent it — without this the page would read no engine dropdown,
+    # assume the default, and hide exactly the fields they came to use.
+    engine = (current.get("TTS_ENGINE") or "kokoro").strip() or "kokoro"
+    model = (current.get("TTS_QWEN_MODEL") or "").lower()
+    if engine != "qwen":
+        context = engine
+    elif "customvoice" in model:
+        context = "qwen:customvoice"
+    elif "voicedesign" in model:
+        context = "qwen:voicedesign"
+    else:
+        context = "qwen:base"
     return {"fields": fields, "sections": sections, "role": role,
+            "context": context,
             "env_exists": ENV_PATH.exists(), "env_path": str(ENV_PATH)}
 
 
@@ -912,8 +931,22 @@ def _save_settings(body: dict, role: str = "admin"):
             return 403, {"ok": False,
                          "error": "Administrators only: " + ", ".join(forbidden)}
 
+    # Settings that become command-line arguments to the speech service, and
+    # so cannot contain whitespace. Learned the hard way: a placeholder option
+    # in the voice lab was submitted as TTS_VOICE, written here, and passed as
+    # --voice "- load this kind first to list its voices -", which argparse
+    # rejected. The service then crash-looped at boot and the panel had no way
+    # to tell you why. Validating here means the UI cannot write a value that
+    # stops the thing booting, whatever the UI does.
+    ARGV_SAFE = {"TTS_VOICE": "a voice name like Serena or bf_emma",
+                 "TTS_LANG_CODE": "a single language letter"}
+
     changes, errors = {}, {}
     for name, raw in values.items():
+        if name in ARGV_SAFE and raw and str(raw).split() != [str(raw)]:
+            errors[name] = (f"must be {ARGV_SAFE[name]} - no spaces. "
+                            f"Got {str(raw)[:40]!r}")
+            continue
         if name not in schema.BY_NAME:
             errors[name] = "not a setting this version knows about"
             continue

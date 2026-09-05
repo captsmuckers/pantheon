@@ -533,9 +533,16 @@ def preview(voice: str, lang: str, text: str = "", instruct: str = "") -> tuple:
     point of the mode, since the wording changes the timbre substantially and
     is not something you can predict from reading it.
     """
+    # Fall back to the CONFIGURED voice, not a Kokoro name. Hardcoding
+    # "bf_emma" meant Test failed outright under Qwen CustomVoice - "Speaker
+    # 'bf_emma' not supported" - because the two engines' voice names share no
+    # namespace. The engine that is running is the only thing that knows what
+    # a valid voice looks like, so ask .env rather than guessing.
+    env = envfile_values()
+    fallback = (env.get("TTS_VOICE") or "").strip() or "bf_emma"
     payload = json.dumps({"text": (text or PREVIEW_TEXT)[:600],
-                          "voice": voice or "bf_emma",
-                          "instruct": instruct,
+                          "voice": voice or fallback,
+                          "instruct": instruct or (env.get("TTS_VOICE_DESIGN") or ""),
                           "lang": lang or "auto"}).encode()
     req = urllib.request.Request("http://127.0.0.1:8085/synthesize", data=payload,
                                  headers={"Content-Type": "application/json"})
@@ -624,3 +631,18 @@ def voices() -> dict:
                 "message": "The speech service is not answering, so the voice "
                            "list is unavailable. Start it from the Status page.",
                 "doc": "https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md"}
+
+
+def tts_health() -> dict:
+    """What the running speech service says it is doing, verbatim.
+
+    The lab needs the engine, the mode and the saved description to tell you
+    what is loaded versus what you are proposing — and the only honest source
+    for that is the process actually serving, not .env, which may have been
+    edited since it started.
+    """
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8085/health", timeout=5) as r:
+            return json.loads(r.read().decode("utf-8"))
+    except Exception as exc:
+        return {"engine": "", "ready": False, "error": type(exc).__name__}

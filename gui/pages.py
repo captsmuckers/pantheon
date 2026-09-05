@@ -18,7 +18,7 @@ import html
 # rest are administrator-only. This only draws the links — the server refuses
 # the routes regardless, so a friend typing /security by hand still gets a 403
 # rather than a page. Hiding them is courtesy, not the control.
-NAV = (("/", "Status", "user"), ("/voice", "Voice", "user"),
+NAV = (("/", "Status", "user"), ("/voice", "Voice lab", "user"),
        ("/settings", "Settings", "admin"), ("/logs", "Logs", "admin"),
        ("/security", "Security", "admin"), ("/setup", "Setup", "admin"))
 
@@ -31,8 +31,14 @@ PROJECT = "Pantheon"
 
 
 def _shell(title: str, here: str, body: str, script: str = "",
-           role: str = "admin") -> str:
-    nav = "".join(
+           role: str = "admin", chrome: bool = True) -> str:
+    """chrome=False drops the nav and centres the body.
+
+    For pages reached BEFORE signing in. A nav offering Settings and Security
+    to somebody who cannot open either is noise at best, and at worst reads as
+    a list of things that are broken.
+    """
+    nav = "" if not chrome else "".join(
         f'<a href="{href}" class="{"on" if href == here else ""}">{html.escape(label)}</a>'
         for href, label, need in NAV
         if role == "admin" or need == "user")
@@ -43,8 +49,8 @@ def _shell(title: str, here: str, body: str, script: str = "",
 <title>{html.escape(title)} — {html.escape(PROJECT)}</title>
 <link rel="stylesheet" href="/static/app.css">
 </head><body>
-<header><h1><span class="mark">◆</span> {html.escape(PROJECT)}</h1><nav>{nav}</nav></header>
-<main>{body}</main>
+<header class="{'' if chrome else 'bare'}"><h1><span class="mark">◆</span> {html.escape(PROJECT)}</h1>{f'<nav>{nav}</nav>' if chrome else ''}</header>
+<main class="{'' if chrome else 'centred'}">{body}</main>
 <div id="toast" class="toast" hidden></div>
 <script src="/static/app.js"></script>
 {f'<script src="/static/{script}"></script>' if script else ''}
@@ -275,7 +281,7 @@ def setup_page() -> str:
 
 def login_page() -> str:
     return _shell("Sign in", "", """
-<section class="panel narrow">
+<section class="panel narrow signin">
   <h2>Sign in</h2>
   <form id="login-form" autocomplete="off">
     <div class="field">
@@ -292,7 +298,7 @@ def login_page() -> str:
     <button type="submit" class="primary">Sign in</button>
   </form>
 </section>
-""", "login.js")
+""", "login.js", chrome=False)
 
 
 def error_page(code: int, message: str) -> str:
@@ -301,7 +307,7 @@ def error_page(code: int, message: str) -> str:
   <h2>{code}</h2>
   <p>{html.escape(message)}</p>
   <p><a href="/">Back to the status page</a></p>
-</section>""")
+</section>""", chrome=False)
 
 
 def forbidden_page() -> str:
@@ -322,25 +328,53 @@ def forbidden_page() -> str:
 
 
 def voice_page(role: str = "admin") -> str:
-    """The voice controls on their own page, for people who get nothing else.
+    """A bench for trying voices, deliberately NOT the settings form.
 
-    Renders from /api/settings exactly as the Settings page does — and that
-    endpoint already filters by role, so a General User's browser is only ever
-    sent the five voice fields. The data-only-voice marker narrows what an
-    ADMIN sees here to the same five, so the page means the same thing for
-    everyone looking at it.
+    The two were the same page and it was the wrong shape: you cannot
+    experiment inside the live configuration without either saving things you
+    are only trying, or bouncing between pages to hear them. So nothing here
+    is bound to .env. You change what you like, press Test as often as you
+    like, and only Apply writes anything.
+
+    What CAN be tried without a restart is bounded by physics rather than
+    choice: voice and description ride on each synthesize call, so they are
+    instant, but the mode IS the checkpoint and trying a different one means
+    loading different weights. That is stated on the page rather than hidden,
+    because a 30 second pause with no explanation reads as a hang.
     """
-    return _shell("Voice", "/voice", """
+    return _shell("Voice lab", "/voice", """
 <section class="panel">
-  <h2>Voice</h2>
-  <p class="sub">How she sounds. Pick one of the built-in timbres, describe a
-     voice in words, or upload a clip to clone — which one applies depends on
-     the model chosen below. Test speaks a line in your browser; it is not
-     heard in Discord.</p>
+  <h2>Voice lab</h2>
+  <p class="sub">Try voices here. Nothing on this page affects Athena until you
+     press <strong>Apply to Athena</strong> at the bottom — until then she keeps
+     using whatever is saved, and Test only plays in this browser.</p>
+  <div id="lab-live" class="state">Checking what is loaded…</div>
 </section>
-<div id="settings" data-only-voice="1"><p class="loading">Loading…</p></div>
-<div class="save-bar">
-  <button type="button" id="save" class="primary">Save</button>
-  <span id="save-note" class="try-note"></span>
-</div>
-""", "settings.js", role)
+
+<section class="panel" id="lab-controls">
+  <p class="loading">Loading…</p>
+</section>
+
+<section class="panel">
+  <h3>Try it</h3>
+  <div class="field">
+    <label for="lab-text">Line to speak</label>
+    <input type="text" id="lab-text"
+           value="Playing The Emperor's New Groove. Do try to keep up.">
+  </div>
+  <div class="try">
+    <button type="button" id="lab-test">▶ Test</button>
+    <span class="try-note" id="lab-note"></span>
+  </div>
+  <audio id="lab-audio" controls hidden></audio>
+</section>
+
+<section class="panel" id="lab-apply-panel">
+  <h3>Apply to Athena</h3>
+  <p class="sub" id="lab-apply-help">This writes what is above to the saved
+     settings and restarts what needs restarting. She will speak in this voice
+     in Discord from then on.</p>
+  <button type="button" id="lab-apply" class="primary">Apply to Athena</button>
+  <span class="try-note" id="lab-apply-note"></span>
+</section>
+""", "voicelab.js", role)

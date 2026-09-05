@@ -72,6 +72,17 @@ class Setting:
     must_exist: bool = False
     platform: str = ""            # "" both, "darwin", "win32"
     advanced: bool = False        # hidden behind a disclosure in a UI
+    # Which speech engine and mode this setting actually does anything under.
+    # Empty means "always". Otherwise a tuple of contexts: "kokoro",
+    # "chatterbox", or "qwen:<mode>" where mode is base, customvoice or
+    # voicedesign.
+    #
+    # This exists because a settings page that shows every field at once is
+    # actively misleading here: on Qwen VoiceDesign, three of the five voice
+    # fields do nothing, and there was no way to tell which. A setting that
+    # silently applies nothing is the single most confusing thing this UI can
+    # do — the same trap TTS_VOICE fell into when its restart target was wrong.
+    applies: tuple = ()
 
     def is_secret(self) -> bool:
         return self.kind == "secret"
@@ -258,12 +269,15 @@ SETTINGS: tuple[Setting, ...] = (
     _s("TTS_ENGINE", "choice", default="kokoro",
        choices=("kokoro", "chatterbox", "qwen"),
        section="Speech", restart="tts",
-       help="kokoro is ~0.2s a reply and mispronounces proper nouns. chatterbox "
-            "reads them correctly and takes ~8s, holding ~200% CPU while it "
-            "does, which can break playback up on a loaded machine. qwen runs "
-            "on MLX at ~1.9s a reply, clones a voice from a clip, and is the "
-            "only engine with built-in timbres and a describe-it-in-words mode "
-            "- see TTS_QWEN_MODEL. Each engine has its own venv."),
+       help="Which speech engine runs. This decides which of the fields below "
+            "do anything.  \u2022 kokoro: 54 fixed voices, ~0.4s a line, the "
+            "fastest by far. Cannot copy a voice. Mispronounces proper nouns.  "
+            "\u2022 qwen: ~1-2s a line. Can use 9 built-in voices, invent one "
+            "from a written description, or copy one from a recording \u2014 "
+            "pick which with 'Qwen model' below. Recommended.  "
+            "\u2022 chatterbox: copies a voice from a recording. ~2.4s a line "
+            "and slower on short ones than long. Kept for comparison; qwen "
+            "does the same job faster."),
     # The checkpoint doubles as the mode switch because Qwen publishes Base,
     # CustomVoice and VoiceDesign as separate weights - you cannot flip between
     # them without loading a different model, so a separate mode setting could
@@ -281,49 +295,65 @@ SETTINGS: tuple[Setting, ...] = (
            "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit",
            "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
        ),
+       applies=("qwen:base", "qwen:customvoice", "qwen:voicedesign"),
        section="Speech", restart="tts",
-       help="qwen only. The repo name picks the mode: ...-CustomVoice-... uses "
-            "the 9 built-in timbres via TTS_VOICE (Vivian, Serena, Uncle_Fu, "
-            "Dylan, Eric, Ryan, Aiden, Ono_Anna, Sohee - only Ryan and Aiden "
-            "are natively English). ...-VoiceDesign-... uses TTS_VOICE_DESIGN. "
-            "...-Base-... clones TTS_VOICE_REF. 0.6B is ~20% faster than 1.7B; "
-            "1.7B scores better. 8bit and bf16 measured the same."),
+       help="How the Qwen voice is chosen. The name says which: "
+            "\u2022 CustomVoice \u2014 pick one of 9 ready-made voices.  "
+            "\u2022 VoiceDesign \u2014 describe the voice you want in words.  "
+            "\u2022 Base \u2014 copy a voice from a recording you upload.  "
+            "1.7B sounds slightly better than 0.6B and is about 20% slower; "
+            "both are comfortably faster than real time. Changing this loads "
+            "different weights, so it takes about 30 seconds."),
     # The bot, not the speech service: it sends the description on every
     # synthesize call, exactly as it does the voice name. That keeps a voice
     # change off the ~30s Qwen checkpoint reload — the weights are the same
     # whatever you describe.
     _s("TTS_VOICE_DESIGN", "str", default="", section="Speech", restart="bot",
-       help="qwen VoiceDesign only: the voice described in words, e.g. \"a low, "
-            "dry, aristocratic English woman, bored and faintly contemptuous\". "
-            "Ignored by every other engine and mode. Wording changes timbre a "
-            "lot - expect to iterate. Send an instruct field to /synthesize to "
-            "audition one without restarting."),
+       applies=("qwen:voicedesign",),
+       help="Describe the voice you want, in plain English \u2014 age, accent, "
+            "pitch and manner all work: \"a woman in her thirties with a low, "
+            "dry, aristocratic English voice, bored and faintly contemptuous\". "
+            "Typing here changes nothing on its own: press Test this "
+            "description to hear it in your browser, then Save and restart the "
+            "bot for her to use it in Discord. The wording matters more than "
+            "you would expect and is hard to predict, so expect to test a few."),
     _s("TTS_VOICE_REF_TEXT", "str", default="", section="Speech", restart="tts",
-       help="qwen Base only: what is actually said in TTS_VOICE_REF. The model "
-            "takes the clip AND its transcript; leaving this blank still "
-            "produces speech, just a worse clone, so nothing tells you it is "
-            "missing."),
+       applies=("qwen:base",),
+       help="What is actually said in the recording above. Filled in for you "
+            "when you upload \u2014 check it, because it is transcribed "
+            "automatically and is occasionally wrong. Qwen copies a voice "
+            "noticeably better when it has both the audio and the words; "
+            "leaving this blank still works, it just sounds less like the "
+            "original and nothing warns you."),
     # The bot, not the speech service: it sends the voice name on every
     # synthesize call, and the server only falls back to its own --voice when
     # a request omits one. Restarting the speech service therefore changes
     # nothing, which looked exactly like the setting being ignored.
     _s("TTS_VOICE", "str", default="bf_emma", section="Speech", restart="bot",
-       help="Kokoro voice name. 54 are published. The first letter is the "
-            "language: af_/am_ American, bf_/bm_ British, and so on. Use Test "
-            "to hear one before saving it."),
-    _s("TTS_LANG_CODE", "choice", default="auto", section="Speech", restart="tts",
+       applies=("kokoro", "qwen:customvoice"),
+       help="Which ready-made voice to use. Under Qwen CustomVoice these are "
+            "Vivian, Serena, Uncle_Fu, Dylan, Eric, Ryan, Aiden, Ono_Anna and "
+            "Sohee \u2014 press Browse voices to see them with descriptions. "
+            "Under Kokoro they look like bf_emma or af_heart, where the first "
+            "letter is the language and the second the sex. The two sets are "
+            "not interchangeable. Use Test to hear one before saving."),
+    _s("TTS_LANG_CODE", "choice", default="auto", section="Speech",
+       restart="tts", applies=("kokoro",),
        choices=("auto", "a", "b", "e", "f", "h", "i", "j", "p", "z"),
-       help="Which pronunciation rules to read the text with. This is separate "
-            "from the voice: the voice decides who it sounds like, this decides "
-            "how words are said. \"auto\" takes it from the voice name's first "
-            "letter, which is what you want unless you are deliberately "
-            "mismatching them — a=American, b=British, e=Spanish, f=French, "
-            "h=Hindi, i=Italian, j=Japanese, p=Portuguese, z=Mandarin. Japanese "
-            "and Mandarin need an extra package the settings page will offer to "
-            "install."),
+       help="Kokoro only. Which pronunciation rules to read the text with \u2014 "
+            "separate from the voice: the voice decides who it sounds like, "
+            "this decides how words are said. \"auto\" takes it from the "
+            "voice name's first letter, which is what you want unless you are "
+            "deliberately reading one language in another's accent. Qwen has "
+            "no equivalent and ignores this."),
     _s("TTS_VOICE_REF", "path", section="Speech", restart="tts",
-       help="Chatterbox only. A clip of the voice to clone. Only the first ~10 "
-            "seconds are read, so it should be the best ten, not the longest."),
+       applies=("qwen:base", "chatterbox"),
+       help="A recording of the voice to copy. Press Upload a clip and pick "
+            "any audio or video file \u2014 it is trimmed to 10 seconds from "
+            "the start offset, converted and levelled for you. Only the first "
+            "6 seconds decide who it sounds like, so give it the best 10, one "
+            "speaker, no music, in the tone you want back. A compressed or "
+            "echoey source is copied faithfully, including the compression."),
     _s("TTS_URL", "str", default="http://127.0.0.1:8085", section="Speech",
        advanced=True),
     _s("TTS_MAX_CHARS", "int", default=600, lo=80, hi=2000, section="Speech",

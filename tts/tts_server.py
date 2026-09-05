@@ -743,9 +743,20 @@ class Handler(BaseHTTPRequestHandler):
             # because "synthesis failed" for a typo sends you looking at the
             # model, the device and the audio path before the spelling.
             blob = f"{type(exc).__name__}: {exc}"
-            if "404" in blob or "EntryNotFound" in blob:
-                self._json(404, {"error": f"No such voice: {voice!r}. Voice "
-                                          "names look like bf_emma or af_heart.",
+            # Each engine reports an unknown voice differently: Kokoro fails as
+            # a 404 from the HuggingFace download several frames down, Qwen
+            # raises ValueError("Speaker 'x' not supported"). Both mean the
+            # same thing to whoever typed it, and both deserve the name back
+            # rather than "synthesis failed", which sends you looking at the
+            # model and the audio path before the spelling.
+            unknown_voice = ("404" in blob or "EntryNotFound" in blob
+                             or "not supported" in blob.lower()
+                             or "speaker" in blob.lower())
+            if unknown_voice:
+                known = (", ".join(QWEN_SPEAKERS) if ENGINE == "qwen"
+                         else "names like bf_emma or af_heart")
+                self._json(404, {"error": f"No such voice: {voice!r}. "
+                                          f"This engine has: {known}.",
                                  "voice": voice})
             else:
                 self._json(500, {"error": "synthesis failed", "detail": blob[:200]})

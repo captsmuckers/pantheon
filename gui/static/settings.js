@@ -79,8 +79,60 @@ function fieldBlock(f) {
     </div>`;
 }
 
+
+/* WHICH FIELDS ARE LIVE RIGHT NOW.
+   A setting that is on screen but does nothing is worse than one that is
+   missing: you fill it in, save, restart, and the voice is unchanged with
+   nothing to say why. On Qwen VoiceDesign three of the five voice fields do
+   nothing at all, so they are hidden rather than shown greyed - and the whole
+   set re-evaluates the moment the engine or model dropdown changes, so
+   switching mode shows you what you would be filling in.
+
+   The rule lives in schema.py (Setting.applies) and arrives per field; this
+   only reads it. Anything with no rule applies always. */
+let SERVER_CONTEXT = '';
+
+function activeContext() {
+  const val = id => {
+    const el = document.getElementById('f-' + id);
+    return el ? String(el.value || '') : '';
+  };
+  /* Prefer what is on screen, so an unsaved change to either dropdown takes
+     effect immediately. Fall back to what the server says is in .env, which
+     is the only source a General User has: they are not sent TTS_ENGINE at
+     all, and guessing the default would hide the fields they came for. */
+  const engine = val('TTS_ENGINE') || SERVER_CONTEXT.split(':')[0] || 'kokoro';
+  if (engine !== 'qwen') return engine;
+  const model = val('TTS_QWEN_MODEL').toLowerCase();
+  if (model.includes('customvoice')) return 'qwen:customvoice';
+  if (model.includes('voicedesign')) return 'qwen:voicedesign';
+  if (model) return 'qwen:base';
+  return SERVER_CONTEXT || 'qwen:base';
+}
+
+const MODE_HELP = {
+  'kokoro': 'Kokoro: 54 ready-made voices, the fastest option. Pick one in Voice, and Language decides the pronunciation rules.',
+  'chatterbox': 'Chatterbox: copies a voice from a recording. Upload one under Voice reference.',
+  'qwen:customvoice': 'Qwen, ready-made voices: press Browse voices and pick one of the nine, then Test. Only Ryan and Aiden are natively English.',
+  'qwen:voicedesign': 'Qwen, described voice: write what she should sound like, press Test, adjust the wording, repeat. Testing needs no restart.',
+  'qwen:base': 'Qwen, copied voice: upload a recording under Voice reference. It is trimmed and transcribed for you; check the transcript.'
+};
+
+function applyRelevance() {
+  const ctx = activeContext();
+  for (const f of (FIELDS || [])) {
+    const row = document.getElementById('wrap-' + f.name);
+    if (!row) continue;
+    const rules = f.applies || [];
+    row.hidden = rules.length > 0 && !rules.includes(ctx);
+  }
+  const note = document.getElementById('voice-explainer');
+  if (note && MODE_HELP[ctx]) note.textContent = MODE_HELP[ctx];
+}
+
 function render(data) {
   FIELDS = data.fields;
+  SERVER_CONTEXT = data.context || SERVER_CONTEXT;
   document.getElementById('env-path').textContent = data.env_path;
 
   const bySection = new Map();
@@ -289,15 +341,33 @@ document.getElementById('settings-form').addEventListener('submit', e => {
    whatever is currently TYPED — not what is saved — so a voice can be judged
    before committing to it. The language gets a live report of which
    phonemisers are actually installed. */
+/* The Test control. Attached to whichever field IS the voice in a given mode,
+   which is three different fields across the five modes — it used to hang off
+   TTS_VOICE alone, so hiding that field in VoiceDesign mode silently took the
+   Test button with it and the help text told people to press something that
+   was not on the page. Distinct ids rather than repeating one, because all
+   three exist in the DOM at once and only one is visible. */
+function tryBlock(id, label) {
+  return `<div class="try">
+      <button type="button" class="try-btn" data-try="${id}">▶ ${label}</button>
+      ${id === 'voice' ? '<button type="button" id="browse-voices" class="ghost">Browse voices</button>' : ''}
+      <span class="try-note try-note-${id}"></span>
+      <audio class="try-audio try-audio-${id}" controls hidden></audio>
+    </div>
+    ${id === 'voice' ? '<div id="voice-list" class="voice-list" hidden></div>' : ''}`;
+}
+
 function extras(f) {
   if (f.name === 'TTS_VOICE') {
-    return `<div class="try">
-        <button type="button" id="try-voice">▶ Test this voice</button>
-        <button type="button" id="browse-voices" class="ghost">Browse voices</button>
-        <span class="try-note" id="try-note"></span>
-        <audio id="try-audio" controls hidden></audio>
-      </div>
-      <div id="voice-list" class="voice-list" hidden></div>`;
+    return tryBlock('voice', 'Test this voice');
+  }
+  if (f.name === 'TTS_VOICE_DESIGN') {
+    return tryBlock('design', 'Test this description')
+      + `<p class="help">Nothing here reaches Discord until you press Save and
+         the bot restarts. Test only plays it in this browser.</p>`;
+  }
+  if (f.name === 'TTS_VOICE_REF') {
+    return tryBlock('ref', 'Test this voice');
   }
   if (f.name === 'TTS_LANG_CODE') {
     return `<div id="lang-state" class="lang-state"></div>`;
@@ -391,13 +461,14 @@ document.addEventListener('change', e => {
 });
 
 document.addEventListener('click', e => {
-  const btn = e.target.closest('#try-voice, .install-lang');
+  const btn = e.target.closest('.try-btn, .install-lang');
   if (!btn) return;
 
-  if (btn.id === 'try-voice') {
+  if (btn.classList && btn.classList.contains('try-btn')) {
+    const which = btn.dataset.try;
     const { voice, lang, instruct } = currentVoiceAndLang();
-    const note = document.getElementById('try-note');
-    const audio = document.getElementById('try-audio');
+    const note = document.querySelector('.try-note-' + which);
+    const audio = document.querySelector('.try-audio-' + which);
     btn.disabled = true;
     note.textContent = 'Synthesising…';
     note.className = 'try-note';
@@ -550,20 +621,18 @@ function load() {
     BOT_NAME = (d.services && d.services.bot && d.services.bot.title) || 'the bot';
   }).catch(() => {}).then(() => api('/api/settings'))
     .then(d => {
-      /* The Voice page reuses this whole file, narrowed to the voice fields.
-         Presentation only — /api/settings has already filtered by role, so a
-         General User was never sent anything else to begin with. */
-      const host = document.getElementById('settings');
-      if (host && host.dataset.onlyVoice) {
-        const keep = new Set(['TTS_VOICE', 'TTS_VOICE_DESIGN', 'TTS_VOICE_REF',
-                              'TTS_VOICE_REF_TEXT', 'TTS_QWEN_MODEL']);
-        d = Object.assign({}, d, {
-          fields: (d.fields || []).filter(f => keep.has(f.name))
-        });
-        d.sections = [...new Set(d.fields.map(f => f.section))];
-      }
-      render(d); recompute();
+      render(d); recompute(); applyRelevance();
     })
     .then(loadLanguages);
 }
 load();
+
+/* The engine and model dropdowns decide what everything else means, so a
+   change to either re-evaluates the whole set immediately rather than at the
+   next reload. Delegated, because the fields are re-rendered from scratch. */
+document.addEventListener('change', e => {
+  const el = e.target;
+  if (el && (el.id === 'f-TTS_ENGINE' || el.id === 'f-TTS_QWEN_MODEL')) {
+    applyRelevance();
+  }
+});

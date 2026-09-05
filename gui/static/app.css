@@ -305,3 +305,28 @@ table.users { width: 100%; border-collapse: collapse; margin: .6rem 0; }
 table.users th { text-align: left; font-weight: 600; opacity: .7; font-size: .85em; }
 table.users td, table.users th { padding: .35rem .5rem; border-bottom: 1px solid var(--line, #333); }
 table.users .you { opacity: .6; font-size: .85em; }
+
+/* Voice lab: the kind-of-voice chooser. Cards rather than a dropdown because
+   each option needs a sentence of explanation to be meaningful. */
+.lab-modes { display: grid; gap: .5rem; margin: .6rem 0; }
+.lab-mode { display: grid; grid-template-columns: auto 1fr; gap: .1rem .6rem;
+            align-items: start; padding: .6rem .8rem; border: 1px solid var(--line, #333);
+            border-radius: 6px; cursor: pointer; }
+.lab-mode input { grid-row: 1 / span 2; align-self: center; }
+.lab-mode .sub { grid-column: 2; font-size: .85em; opacity: .7; margin: 0; }
+.lab-mode.on { border-color: var(--accent, #6ea8fe); }
+.help.warn { border-left: 3px solid var(--warn, #b8860b); padding-left: .6rem; }
+#lab-audio { width: 100%; margin-top: .5rem; }
+
+/* Signed-out pages: no nav, everything centred on the page.
+   The header keeps the name and mark but drops to a plain centred block, so
+   the page reads as one thing rather than as a chrome-less version of the
+   app. */
+header.bare { display: block; text-align: center; border-bottom: none;
+              padding-top: 3rem; }
+header.bare h1 { justify-content: center; }
+main.centred { display: flex; align-items: flex-start; justify-content: center;
+               min-height: 50vh; }
+main.centred .panel.narrow { width: min(24rem, 92vw); margin: 0; }
+main.centred .signin h2 { text-align: center; margin-top: 0; }
+main.centred .signin button.primary { width: 100%; }

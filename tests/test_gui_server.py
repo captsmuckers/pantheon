@@ -288,9 +288,14 @@ def test_preview_needs_the_speech_service(p):
     """
     print("\npreviewing a voice:")
     hdr = {"X-Pantheon-CSRF": "1"}
+    # No voice named, deliberately. Asking for "bf_emma" hardcoded a KOKORO
+    # name into a test that runs against whatever engine is configured, and it
+    # broke the moment this machine moved to Qwen: the service was up and
+    # correct, and refused a voice belonging to another engine. Omitting it
+    # exercises what the Test button actually does — preview the CONFIGURED
+    # voice — and works whichever engine is serving.
     code, data, headers = request(p.port, "/api/tts/preview", "POST",
-                                  {"voice": "bf_emma", "lang": "auto"}, hdr,
-                                  raw=True)
+                                  {"lang": "auto"}, hdr, raw=True)
     if code == 200:
         check("returns audio", "audio/wav" in headers.get("Content-Type", ""),
               headers.get("Content-Type", ""))
@@ -299,8 +304,14 @@ def test_preview_needs_the_speech_service(p):
         check("the audio is not empty", len(data) > 1000, f"{len(data)} bytes")
     else:
         body = json.loads(data.decode("utf-8", "replace"))
-        check("says the speech service is not answering",
-              "speech service" in body.get("error", "").lower(), str(body)[:90])
+        # Legible means it names what went wrong, not that it names one
+        # specific failure: the service can be down, or up and refusing the
+        # voice. Both are fine to report; a bare "synthesis failed" is not.
+        err = body.get("error", "").lower()
+        check("the failure is legible",
+              bool(err) and ("speech service" in err or "no such voice" in err
+                             or "not answering" in err),
+              str(body)[:90])
 
 
 def test_the_machines_own_names_are_accepted(p):
