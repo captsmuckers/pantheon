@@ -362,9 +362,18 @@ SETTINGS: tuple[Setting, ...] = (
     _s("TTS_ACK_ENABLED", "bool", default=True, section="Speech",
        help="A short pre-rendered \"heard you\" the moment a wake word lands. "
             "The problem it solves is not the delay, it is the silence."),
-    _s("TTS_ACK_LINES", "str", section="Speech", advanced=True,
+    # No longer advanced=True. It was hidden behind the disclosure, which is
+    # part of why "how do I add a phrase" was hard to answer — the setting is
+    # ordinary and personal, not an internal knob.
+    _s("TTS_ACK_LINES", "str", section="Speech", restart="bot",
        default="Mm. || Fine. || One moment. || If I must. || Working on it.",
-       help="Separated by ||. Delete the acks directory to re-render."),
+       help="Short things she says the instant she hears you, so a request is "
+            "not met with silence while she thinks. Separate them with || and "
+            "press Save, then restart the bot — that is all; they are rendered "
+            "at startup and cached automatically. Editing or adding a line "
+            "renders just that one, and clips from a previous voice are "
+            "cleaned up on the next successful start, so there is nothing to "
+            "delete by hand."),
     _s("STREAM_AUDIO_ENABLED", "bool", default=False, section="Speech",
        restart="none",
        help="Route media audio through a clean virtual device so a Discord "

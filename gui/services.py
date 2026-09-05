@@ -442,7 +442,88 @@ def transcribe(path: Path) -> str:
     return out.strip() if code == 0 else ""
 
 
-def save_voice_ref(data: bytes, filename: str, start: float = 0.0) -> dict:
+def _sidecar(wav: Path) -> Path:
+    """Where a clip's transcript and label live: beside it, same stem.
+
+    Beside the file rather than in .env because there is only ONE
+    TTS_VOICE_REF_TEXT and a library needs one transcript per clip. Keeping
+    them apart meant switching back to an older clip silently carried the
+    NEWER clip's transcript, which does not error — it just clones badly, the
+    same shape of fault as having no reference at all.
+    """
+    return wav.with_suffix(".json")
+
+
+def voice_refs() -> dict:
+    """Every saved clip, with what is said in it. The library.
+
+    Backfills a sidecar for any clip that predates them, so voices uploaded
+    before this existed are usable rather than invisible. Transcribing is
+    slow, so a missing one is recorded as empty and filled in on demand
+    rather than blocking the listing.
+    """
+    VOICES_DIR.mkdir(parents=True, exist_ok=True)
+    out = []
+    for wav in sorted(VOICES_DIR.glob("*.wav")):
+        meta = {}
+        side = _sidecar(wav)
+        if side.exists():
+            try:
+                meta = json.loads(side.read_text("utf-8"))
+            except (ValueError, OSError):
+                meta = {}
+        try:
+            import wave as _w
+            with _w.open(str(wav)) as w:
+                seconds = round(w.getnframes() / w.getframerate(), 1)
+        except Exception:
+            seconds = 0.0
+        out.append({
+            "name": wav.stem,
+            "path": str(wav.relative_to(ROOT)),
+            "label": meta.get("label") or wav.stem.replace("_", " "),
+            "transcript": meta.get("transcript", ""),
+            "added_by": meta.get("added_by", ""),
+            "added": meta.get("added", ""),
+            "seconds": seconds,
+            "needs_transcript": not meta.get("transcript"),
+        })
+    return {"voices": out, "count": len(out)}
+
+
+def describe_voice_ref(name: str) -> dict:
+    """Transcribe a saved clip that has no transcript yet, and remember it."""
+    wav = VOICES_DIR / f"{_voice_ref_name(name)}"
+    if not wav.exists():
+        return {"ok": False, "error": "No such saved voice."}
+    text = transcribe(wav)
+    meta = {}
+    if _sidecar(wav).exists():
+        try:
+            meta = json.loads(_sidecar(wav).read_text("utf-8"))
+        except (ValueError, OSError):
+            meta = {}
+    meta["transcript"] = text
+    _sidecar(wav).write_text(json.dumps(meta, indent=2), "utf-8")
+    return {"ok": True, "transcript": text,
+            "note": "" if text else "Could not transcribe it — type what is said."}
+
+
+def delete_voice_ref(name: str) -> dict:
+    """Remove a saved clip and its transcript."""
+    wav = VOICES_DIR / f"{_voice_ref_name(name)}"
+    if not wav.exists():
+        return {"ok": False, "error": "No such saved voice."}
+    try:
+        wav.unlink()
+        _sidecar(wav).unlink(missing_ok=True)
+    except OSError as exc:
+        return {"ok": False, "error": f"Could not remove it: {exc}"}
+    return {"ok": True, **voice_refs()}
+
+
+def save_voice_ref(data: bytes, filename: str, start: float = 0.0,
+                   label: str = "", added_by: str = "") -> dict:
     """Store an uploaded clip as a voice reference, and describe what we got.
 
     Does exactly what scripts/make-voice-ref.sh does, for the same measured
@@ -462,6 +543,15 @@ def save_voice_ref(data: bytes, filename: str, start: float = 0.0) -> dict:
     VOICES_DIR.mkdir(parents=True, exist_ok=True)
     out_name = _voice_ref_name(filename)
     out_path = VOICES_DIR / out_name
+    # Adding, not replacing. Several people uploading "voice.wav" would
+    # otherwise silently overwrite each other, and the loser would have no way
+    # to tell - their clip would simply become someone else's.
+    if out_path.exists():
+        stem, n = out_path.stem, 2
+        while out_path.exists():
+            out_path = VOICES_DIR / f"{stem}-{n}.wav"
+            n += 1
+        out_name = out_path.name
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=Path(filename).suffix or ".bin") as tmp:
         tmp.write(data)
@@ -492,11 +582,20 @@ def save_voice_ref(data: bytes, filename: str, start: float = 0.0) -> dict:
         if not text:
             note = (note + " ").strip() + ("Could not transcribe it — type what "
                                            "is said, or the clone will be worse.")
+        import datetime
+        _sidecar(out_path).write_text(json.dumps({
+            "transcript": text,
+            "label": label or out_path.stem.replace("_", " "),
+            "added_by": added_by,
+            "added": datetime.date.today().isoformat(),
+        }, indent=2), "utf-8")
         return {"ok": True,
+                "name": out_path.stem,
                 "path": str(out_path.relative_to(ROOT)),
                 "transcript": text,
                 "seconds": round(seconds, 1),
-                "note": note}
+                "note": note,
+                **voice_refs()}
     finally:
         src.unlink(missing_ok=True)
 

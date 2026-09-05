@@ -132,7 +132,7 @@ USER_PATHS = frozenset({
     "/", "/voice",                 # status, and the voice page
     "/api/status", "/api/logout",
     "/api/tts/voices", "/api/tts/preview", "/api/tts/voice-ref",
-    "/api/tts/health",
+    "/api/tts/health", "/api/tts/voice-refs",
     "/api/settings",               # FILTERED by role - see _settings_for_role
     "/api/service",                # RESTRICTED to bot/tts restart - see _service
 })
@@ -449,6 +449,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, services.voices())
         elif path == "/api/tts/health":
             self._json(200, services.tts_health())
+        elif path == "/api/tts/voice-refs":
+            self._json(200, services.voice_refs())
         else:
             self._fail(404, "No such page.")
 
@@ -479,6 +481,8 @@ class Handler(BaseHTTPRequestHandler):
             self._preview(body)
         elif path == "/api/tts/voice-ref":
             self._voice_ref()
+        elif path == "/api/tts/voice-refs":
+            self._voice_refs(body)
         elif path == "/api/panel/restart":
             self._restart_panel()
         elif path == "/api/users":
@@ -625,6 +629,28 @@ class Handler(BaseHTTPRequestHandler):
             pass
         threading.Timer(0.4, boot).start()
 
+    def _voice_refs(self, body: dict):
+        """Act on the saved-voice library: transcribe one, or delete one.
+
+        Deleting is administrators only. Anyone with the lab can ADD a voice,
+        because that is the point of it; letting them remove each other's
+        would make a shared library a place where work quietly disappears.
+        """
+        action = str(body.get("action", ""))
+        name = str(body.get("name", ""))
+        if action == "delete":
+            if not self._is_admin():
+                self._json(403, {"ok": False,
+                                 "error": "Only administrators can remove a "
+                                          "saved voice."})
+                return
+            self._json(200, services.delete_voice_ref(name))
+            return
+        if action == "transcribe":
+            self._json(200, services.describe_voice_ref(name))
+            return
+        self._json(400, {"ok": False, "error": "Unknown action."})
+
     def _voice_ref(self):
         """Take an uploaded clip and turn it into a usable voice reference.
 
@@ -648,7 +674,10 @@ class Handler(BaseHTTPRequestHandler):
             start = float(self.headers.get("X-Voice-Start") or 0)
         except ValueError:
             start = 0.0
-        result = services.save_voice_ref(raw, name, start)
+        result = services.save_voice_ref(
+            raw, name, start,
+            label=self.headers.get("X-Voice-Label") or "",
+            added_by=self._session().get("user", ""))
         self._json(200 if result.get("ok") else 400, result)
 
     def _api_logs(self, query: dict):

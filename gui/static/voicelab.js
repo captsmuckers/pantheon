@@ -76,7 +76,12 @@ function controls() {
       <p class="help">Age, accent, pitch and manner all work. Press Test, adjust
          the wording, test again — it costs nothing and needs no restart.</p></div>`;
   } else if (mode === 'base') {
-    html += `<div class="field"><label>Recording to copy</label>
+    html += `<div class="field"><label for="lab-saved">Saved voices</label>
+      <select id="lab-saved"><option value="">— loading —</option></select>
+      <p class="help">Every clip anyone has uploaded. Picking one loads it and
+         the words spoken in it together — they are stored as a pair, so an
+         old voice never gets a newer voice's transcript.</p></div>
+      <div class="field"><label>Or add a new one</label>
       <div class="ref-upload">
         <label class="ghost file-btn">Upload a clip
           <input type="file" id="lab-file" accept="audio/*,video/*" hidden></label>
@@ -87,6 +92,7 @@ function controls() {
       <p class="help">Trimmed to 10 seconds, levelled and transcribed for you.
          One speaker, no music, in the tone you want back.</p>
       <input type="hidden" id="lab-ref" value="${escapeHtml(LIVE.voice_ref || '')}">
+      <span id="lab-refactions"></span>
       <input type="hidden" id="lab-reftext" value="${escapeHtml(LIVE.voice_ref_text || '')}">
       <p class="help" id="lab-refnow">${LIVE.voice_ref
         ? 'Currently using: <code>' + escapeHtml(LIVE.voice_ref) + '</code>'
@@ -96,6 +102,7 @@ function controls() {
   wrap.innerHTML = html;
   wrap.dataset.model = chosen;
   if (mode === 'customvoice') loadVoices();
+  if (mode === 'base') loadSaved();
 }
 
 function loadVoices() {
@@ -116,6 +123,67 @@ function loadVoices() {
          ${escapeHtml(v.id)} — ${escapeHtml(v.note || v.lang_name || '')}</option>`).join('');
   }).catch(() => {});
 }
+
+
+/* The saved-voice library.
+   Clips live in tts/voices with their transcript in a .json beside them, so a
+   voice is one thing rather than two settings that can drift apart. Picking
+   one fills BOTH fields; there is no way to select a clip and inherit the
+   wrong words. */
+let SAVED = [];
+
+function loadSaved() {
+  return api('/api/tts/voice-refs').then(d => {
+    SAVED = d.voices || [];
+    const sel = document.getElementById('lab-saved');
+    if (!sel) return;
+    const cur = (document.getElementById('lab-ref') || {}).value || '';
+    sel.innerHTML = '<option value="">— none —</option>' + SAVED.map(v =>
+      `<option value="${escapeHtml(v.path)}"${v.path === cur ? ' selected' : ''}>
+         ${escapeHtml(v.label)} · ${v.seconds}s${v.added_by ? ' · added by ' + escapeHtml(v.added_by) : ''}
+         ${v.needs_transcript ? ' · no transcript yet' : ''}</option>`).join('');
+    syncSaved();
+  }).catch(() => {});
+}
+
+function syncSaved() {
+  const sel = document.getElementById('lab-saved');
+  const ref = document.getElementById('lab-ref');
+  const txt = document.getElementById('lab-reftext');
+  const now = document.getElementById('lab-refnow');
+  if (!sel || !ref) return;
+  const pick = SAVED.find(v => v.path === sel.value);
+  if (pick) {
+    ref.value = pick.path;
+    txt.value = pick.transcript || '';
+    if (now) {
+      now.innerHTML = pick.transcript
+        ? 'Using <code>' + escapeHtml(pick.label) + '</code>. It says: “'
+          + escapeHtml(pick.transcript.slice(0, 90)) + '…”'
+        : '<strong>No transcript for this clip.</strong> It will still work, '
+          + 'but copies the voice less well. '
+          + '<button type="button" class="ghost" id="lab-transcribe">Transcribe it</button>';
+    }
+  } else if (now) {
+    now.innerHTML = '<strong>No recording chosen.</strong> Pick a saved voice or '
+                  + 'upload one — until then this mode speaks in a default voice.';
+  }
+}
+
+document.addEventListener('change', e => {
+  if (e.target && e.target.id === 'lab-saved') syncSaved();
+});
+
+document.addEventListener('click', e => {
+  const b = e.target.closest('#lab-transcribe');
+  if (!b) return;
+  const sel = document.getElementById('lab-saved');
+  const pick = SAVED.find(v => v.path === sel.value);
+  if (!pick) return;
+  b.disabled = true; b.textContent = 'Listening…';
+  post('/api/tts/voice-refs', { action: 'transcribe', name: pick.name + '.wav' })
+    .then(() => loadSaved());
+});
 
 /* What the lab is currently proposing, as settings names. */
 function proposed() {
@@ -260,9 +328,13 @@ document.addEventListener('change', e => {
       note.textContent = d.error || 'Upload failed.';
       return;
     }
-    document.getElementById('lab-ref').value = d.path;
-    document.getElementById('lab-reftext').value = d.transcript || '';
-    note.textContent = `${d.seconds}s ready. ${d.note || ''} Press Test to hear it.`;
+    SAVED = d.voices || SAVED;
+    note.textContent = `${d.seconds}s saved as "${d.name}". ${d.note || ''} `
+                     + 'It is in Saved voices now. Press Test to hear it.';
+    loadSaved().then(() => {
+      const sel = document.getElementById('lab-saved');
+      if (sel) { sel.value = d.path; syncSaved(); }
+    });
   }).catch(() => {
     note.className = 'try-note bad';
     note.textContent = 'Upload failed.';

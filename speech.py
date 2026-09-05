@@ -550,6 +550,13 @@ class Speaker:
             return 0
         os.makedirs(config.TTS_ACK_DIR, exist_ok=True)
         loaded = 0
+        # Every key rendered this run. Anything else in the directory belongs
+        # to a previous voice or an edited line and will never be played
+        # again, so it is removed at the end rather than left to accumulate —
+        # 30 orphans against 10 live clips is what prompted this, and the
+        # advice people were given was to delete the directory by hand, which
+        # is not something the control panel can offer.
+        wanted = set()
         for line in config.TTS_ACK_LINES:
             # Keyed by voice as well as text, so changing the voice renders new
             # clips instead of playing the old voice's. TTS_VOICE_DESIGN is in
@@ -559,6 +566,7 @@ class Speaker:
             key = hashlib.sha1(
                 f"{config.TTS_VOICE}|{config.TTS_VOICE_DESIGN}|{line}".encode()
             ).hexdigest()[:16]
+            wanted.add(key)
             path = os.path.join(config.TTS_ACK_DIR, f"{key}.wav")
             payload = None
             if os.path.exists(path):
@@ -599,6 +607,22 @@ class Speaker:
                 log.warning("Ack %r would not decode — skipping", line)
         if loaded:
             log.info("%d acknowledgement clips ready", loaded)
+
+        # Drop clips no longer referenced by any configured line. Only after a
+        # successful load: if rendering failed halfway - the speech service
+        # down, say - the old clips are the only ones there are, and deleting
+        # them would turn a temporary outage into a silent bot.
+        if loaded == len(config.TTS_ACK_LINES):
+            removed = 0
+            for name in os.listdir(config.TTS_ACK_DIR):
+                if name.endswith(".wav") and name[:-4] not in wanted:
+                    try:
+                        os.unlink(os.path.join(config.TTS_ACK_DIR, name))
+                        removed += 1
+                    except OSError:
+                        pass
+            if removed:
+                log.info("Removed %d ack clips from a previous voice", removed)
         return loaded
 
     async def ack(self) -> None:
