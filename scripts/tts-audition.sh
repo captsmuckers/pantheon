@@ -66,7 +66,12 @@ TIP
 ;;
           voices) echo "Timbres:"; curl -s "http://127.0.0.1:$PORT/voices" \
                   | "$ROOT/.venv/bin/python" -c "import json,sys
-for v in json.load(sys.stdin)['voices']: print('  %-10s %s' % (v['name'], v['description']))"
+# Keys are id/note/lang_name, NOT name/description: /voices deliberately
+# returns the same shape for every engine so the control panel's picker works
+# unchanged, and this script reads that same endpoint. It used to say
+# v['name'] and died with KeyError the moment the payload was unified.
+for v in json.load(sys.stdin).get('voices', []):
+    print('  %-10s %-9s %s' % (v['id'], v.get('lang_name',''), v.get('note','')))"
                   echo; echo "Try one:"; echo "  scripts/say.sh --voice Serena" ;;
           clone)  echo "Try it:"; echo "  scripts/say.sh" ;;
         esac
