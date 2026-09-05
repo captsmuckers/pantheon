@@ -88,6 +88,23 @@ env_value() {
     [ -z "$line" ] && { echo "$default"; return; }
     local value="${line#*=}"
     [ -z "$value" ] && { echo "$default"; return; }
+    # Unquote, the same way python-dotenv and gui/envfile.py do. The panel
+    # quotes any value that needs it, and this returned the raw right-hand
+    # side — so a quoted setting reached the service with its quotes still
+    # attached. For TTS_VOICE_REF_TEXT that put a stray " at the front of the
+    # reference transcript, which misaligns in-context cloning and shows up
+    # as "the clone is worse" rather than as any kind of error.
+    case "$value" in
+        \"*\")
+            value="${value#\"}"; value="${value%\"}"
+            # Only the escapes dotenv honours inside double quotes.
+            value="$(printf '%s' "$value" | sed -e 's/\\n/\
+/g' -e 's/\\"/"/g' -e 's/\\\\/\\/g')"
+            ;;
+        \'*\')
+            value="${value#\'}"; value="${value%\'}"
+            ;;
+    esac
     echo "$value"
 }
 
