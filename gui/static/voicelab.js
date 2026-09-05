@@ -86,7 +86,12 @@ function controls() {
       </div>
       <p class="help">Trimmed to 10 seconds, levelled and transcribed for you.
          One speaker, no music, in the tone you want back.</p>
-      <input type="hidden" id="lab-ref"><input type="hidden" id="lab-reftext"></div>`;
+      <input type="hidden" id="lab-ref" value="${escapeHtml(LIVE.voice_ref || '')}">
+      <input type="hidden" id="lab-reftext" value="${escapeHtml(LIVE.voice_ref_text || '')}">
+      <p class="help" id="lab-refnow">${LIVE.voice_ref
+        ? 'Currently using: <code>' + escapeHtml(LIVE.voice_ref) + '</code>'
+        : '<strong>No recording set.</strong> Until you upload one and press Apply, '
+          + 'this mode speaks in a default voice that resembles nothing.'}</p></div>`;
   }
   wrap.innerHTML = html;
   wrap.dataset.model = chosen;
@@ -123,8 +128,13 @@ function proposed() {
   if (mode === 'customvoice' && g('lab-voice')) out.TTS_VOICE = g('lab-voice');
   if (mode === 'voicedesign' && g('lab-design')) out.TTS_VOICE_DESIGN = g('lab-design');
   if (mode === 'base') {
-    out.TTS_VOICE_REF = g('lab-ref');
-    out.TTS_VOICE_REF_TEXT = g('lab-reftext');
+    /* Same guard as the other two, and it was missing here: an empty value is
+       written as an empty setting, not skipped, so applying before the upload
+       finished silently cleared the reference. Base then generates with no
+       clip at all — which produces a perfectly good voice that sounds nothing
+       like the recording, and reports no error at any layer. */
+    if (g('lab-ref')) out.TTS_VOICE_REF = g('lab-ref');
+    if (g('lab-reftext')) out.TTS_VOICE_REF_TEXT = g('lab-reftext');
   }
   return out;
 }

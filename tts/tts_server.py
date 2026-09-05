@@ -492,6 +492,7 @@ def _release_device_memory(device: str) -> None:
 
 
 _qwen_model = None
+_WARNED_NO_REF = False
 
 
 def _qwen(device: str):
@@ -546,6 +547,17 @@ def _synth_qwen(text: str, voice: str, instruct: str) -> bytes:
         kwargs["ref_audio"] = VOICE_REF
         if VOICE_REF_TEXT:
             kwargs["ref_text"] = VOICE_REF_TEXT
+    else:
+        # Base with nothing to clone. The model happily generates a default
+        # voice, so this fails as "it does not sound like the recording"
+        # rather than as an error — the single hardest kind of fault to chase,
+        # because every layer reports success. Say it once per process.
+        global _WARNED_NO_REF
+        if not _WARNED_NO_REF:
+            _WARNED_NO_REF = True
+            log.warning("Base checkpoint loaded with NO voice reference: "
+                        "TTS_VOICE_REF is empty, so this speaks in a default "
+                        "voice, not a cloned one.")
 
     with _lock:
         chunks, sr = [], None
@@ -695,7 +707,14 @@ class Handler(BaseHTTPRequestHandler):
                                   else DEFAULT_VOICE,
                          "engine": ENGINE, "device": self.device,
                          **({"qwen_model": QWEN_MODEL, "qwen_mode": qwen_mode(),
-                             "voice_design": VOICE_DESIGN} if ENGINE == "qwen" else {}),
+                             "voice_design": VOICE_DESIGN,
+                             "voice_ref": VOICE_REF,
+                             "voice_ref_text": VOICE_REF_TEXT,
+                             # The panel needs to be able to SAY this, because
+                             # nothing else about the output reveals it.
+                             "misconfigured": (qwen_mode() == "base"
+                                               and not VOICE_REF)}
+                            if ENGINE == "qwen" else {}),
                          "lang": lang, "lang_setting": LANG_CODE,
                          "lang_name": LANGUAGES.get(lang, lang),
                          "languages": language_report()})
